@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+.DS_Store
+
+# Recordings (large binary files)
+*.wav
+*.png
+
+# Xcode
+AcousticProbe/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+DerivedData/

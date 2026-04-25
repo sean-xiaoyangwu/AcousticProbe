@@ -33,6 +33,14 @@ def lowpass(data, cutoff, fs, order=5):
     sos = signal.butter(order, cutoff, btype='low', fs=fs, output='sos')
     return signal.sosfilt(sos, data)
 
+def highpass_zp(data, cutoff, fs, order=2):
+    sos = signal.butter(order, cutoff, btype='high', fs=fs, output='sos')
+    return signal.sosfiltfilt(sos, data)
+
+def bandpass_zp(data, low, high, fs, order=2):
+    sos = signal.butter(order, [low, high], btype='band', fs=fs, output='sos')
+    return signal.sosfiltfilt(sos, data)
+
 def moving_average(x, w):
     return np.convolve(x, np.ones(w), 'valid') / w
 
@@ -127,15 +135,18 @@ def process(wav_path: str):
     complex_ffts   = np.fft.rfft(mixed_lp, n=NFFT, axis=1)
     phase_series   = np.angle(complex_ffts[:, median_bin])
     phase_unwrapped = np.unwrap(phase_series)
-    # Convert phase → displacement: Δd = Δφ * c / (4π * fc)
     fc             = (f0 + f1) / 2
     displacement_mm = (phase_unwrapped - phase_unwrapped[0]) * c / (4 * np.pi * fc) * 1000
 
-    # Low-pass at 3 Hz to isolate respiration (~0.1–0.5 Hz range)
-    resp_signal = lowpass(displacement_mm, 3.0, 1/T, order=3)
+    # Remove slow drift: linear detrend then high-pass at 0.05 Hz
+    displacement_detrended = signal.detrend(displacement_mm)
+    displacement_detrended = highpass_zp(displacement_detrended, 0.05, 1/T)
+
+    # Bandpass 0.1–3 Hz to isolate respiration, zero-phase to preserve waveform shape
+    resp_signal = bandpass_zp(displacement_detrended, 0.1, 3.0, 1/T)
 
     # Estimate respiration rate via FFT of displacement
-    resp_fft   = np.abs(np.fft.rfft(resp_signal - np.mean(resp_signal)))
+    resp_fft   = np.abs(np.fft.rfft(resp_signal))
     resp_freqs = np.fft.rfftfreq(len(resp_signal), d=T)
     # Only look at 0.1–1 Hz (6–60 breaths/min)
     resp_mask  = (resp_freqs >= 0.1) & (resp_freqs <= 1.0)
@@ -178,9 +189,9 @@ def process(wav_path: str):
 
     # 4. Phase displacement (respiration)
     ax4 = axes[3]
-    ax4.plot(t_chirps, displacement_mm, lw=0.8, alpha=0.5, label='raw phase disp.')
-    ax4.plot(t_chirps, resp_signal, lw=1.5, color='red', label='<3 Hz (respiration)')
-    ax4.set_title("Phase-based displacement (HAR: respiration)")
+    ax4.plot(t_chirps, displacement_detrended, lw=0.8, alpha=0.5, label='detrended disp.')
+    ax4.plot(t_chirps, resp_signal, lw=1.5, color='red', label='0.1–3 Hz (respiration)')
+    ax4.set_title("Phase-based displacement — drift removed (HAR: respiration)")
     ax4.set_ylabel("Displacement (mm)")
     ax4.set_xlabel("Time (s)")
     ax4.legend(fontsize=8)

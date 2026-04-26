@@ -1,22 +1,27 @@
 """
 AcousticProbe — GUI launcher
-Run:  python run_analysis.py
+Double-click AcousticProbe Analyzer.app, or run:  python run_analysis.py
 """
 
 import sys
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox
 import threading
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent))
 
-def run_analysis(wav_path: str, status_var: tk.StringVar, btn: tk.Button):
+
+def run_analysis(wav_path: str, target: float | None,
+                 status_var: tk.StringVar, btn: tk.Button):
     try:
-        status_var.set("Analyzing...")
+        status_var.set("Analyzing…")
         import analyze_fmcw
-        analyze_fmcw.process(wav_path)
+        import importlib
+        importlib.reload(analyze_fmcw)          # pick up any code changes
+        analyze_fmcw.process(wav_path, target_dist=target)
         out = Path(wav_path).with_name(Path(wav_path).stem + "_analyzed.png")
-        status_var.set(f"Done — saved to {out.name}")
+        status_var.set(f"Done — {out.name}")
         import subprocess
         subprocess.Popen(["open", str(out)])
     except Exception as e:
@@ -33,9 +38,23 @@ def pick_and_run():
     )
     if not path:
         return
+
+    raw = target_var.get().strip()
+    target = None
+    if raw:
+        try:
+            target = float(raw)
+        except ValueError:
+            messagebox.showerror("Error", f"Invalid target distance: '{raw}'")
+            return
+
     status_var.set(f"Loaded: {Path(path).name}")
     btn.config(state="disabled")
-    threading.Thread(target=run_analysis, args=(path, status_var, btn), daemon=True).start()
+    threading.Thread(
+        target=run_analysis,
+        args=(path, target, status_var, btn),
+        daemon=True,
+    ).start()
 
 
 root = tk.Tk()
@@ -48,6 +67,16 @@ frame.pack()
 tk.Label(frame, text="AcousticProbe", font=("Helvetica", 16, "bold")).pack(pady=(0, 4))
 tk.Label(frame, text="Select a WAV recording to run the full FMCW analysis.",
          font=("Helvetica", 11), fg="#555").pack(pady=(0, 16))
+
+# Target distance row
+dist_row = tk.Frame(frame)
+dist_row.pack(pady=(0, 14))
+tk.Label(dist_row, text="Target distance (m, optional):",
+         font=("Helvetica", 11)).pack(side="left", padx=(0, 8))
+target_var = tk.StringVar()
+tk.Entry(dist_row, textvariable=target_var, width=6,
+         font=("Helvetica", 12)).pack(side="left")
+tk.Label(dist_row, text="e.g. 0.5", font=("Helvetica", 10), fg="#999").pack(side="left", padx=(6, 0))
 
 btn = tk.Button(frame, text="Open WAV file…", command=pick_and_run,
                 font=("Helvetica", 13), padx=16, pady=8,

@@ -3,10 +3,16 @@ AcousticProbe — Full FMCW Analysis Pipeline
 Based on 6.808 Lab 4 methodology, extended for HAR.
 
 Usage:
-    python analyze_fmcw.py <recording.wav>
+    python analyze_fmcw.py <recording.wav> [--target <distance_m>]
+
+Options:
+    --target <m>   Expected target distance in metres (e.g. --target 0.5).
+                   When given, the phase bin is chosen within ±0.15 m of
+                   this distance instead of the global argmax.
 """
 
 import sys
+import argparse
 import json
 import numpy as np
 from pathlib import Path
@@ -58,7 +64,7 @@ def make_chirp(params: dict) -> np.ndarray:
 
 # ── Core FMCW pipeline ────────────────────────────────────────────────────────
 
-def process(wav_path: str):
+def process(wav_path: str, target_dist: float = None):
     path   = Path(wav_path)
     params = load_params(path)
     fs_raw, data = wavfile.read(str(path))
@@ -110,10 +116,15 @@ def process(wav_path: str):
     c          = 343.0
     range_axis = freq_axis * c * T / (2 * B)   # beat freq → distance (m)
 
-    # ── Step 5: background subtraction (consecutive frame diff) ───────────────
-    bg_sub = np.diff(range_ffts, axis=0)        # shape: (num_chirps-1, NFFT//2+1)
-    bg_sub = np.abs(bg_sub)
-    t_bg   = t_chirps[1:]
+    # ── Step 5: background subtraction (subtract static clutter) ─────────────
+    # Use mean of entire recording as static background so slow motion
+    # (breathing ~0.2 Hz) is not cancelled like it would be with frame diff.
+    static_bg = range_ffts.mean(axis=0)
+    bg_sub    = np.clip(range_ffts - static_bg[np.newaxis, :], 0, None)
+    t_bg      = t_chirps
+
+    # Keep frame-diff for motion-event detection (used in range profile plot)
+    diff_sub  = np.abs(np.diff(range_ffts, axis=0))
 
     # ── Step 6: track peak within 0–3 m window ────────────────────────────────
     max_range_idx = np.searchsorted(range_axis, 3.0)
@@ -130,12 +141,29 @@ def process(wav_path: str):
     peak_distances = range_axis[smoothed_idx.astype(int)]
 
     # ── Step 7: phase-based displacement (for respiration) ────────────────────
-    # Use the dominant range bin; extract complex phase over time
-    median_bin     = int(np.median(raw_peak_idx))
-    complex_ffts   = np.fft.rfft(mixed_lp, n=NFFT, axis=1)
-    phase_series   = np.angle(complex_ffts[:, median_bin])
+    MIN_RANGE_M  = 0.15
+    SEARCH_WIN_M = 0.15   # ±window when --target is specified
+
+    complex_ffts    = np.fft.rfft(mixed_lp, n=NFFT, axis=1)
+    mean_range_full = np.abs(complex_ffts[:, :max_range_idx]).mean(axis=0)
+
+    if target_dist is not None:
+        # User-specified distance: search within ±SEARCH_WIN_M
+        lo = np.searchsorted(range_axis, max(MIN_RANGE_M, target_dist - SEARCH_WIN_M))
+        hi = min(np.searchsorted(range_axis, target_dist + SEARCH_WIN_M), max_range_idx)
+        target_bin = int(np.argmax(mean_range_full[lo:hi])) + lo
+        print(f"Target hint : {target_dist:.2f} m  →  search [{range_axis[lo]:.2f}, {range_axis[hi-1]:.2f}] m")
+    else:
+        # Auto: highest mean amplitude beyond near-field cutoff
+        min_range_idx = np.searchsorted(range_axis, MIN_RANGE_M)
+        target_bin    = int(np.argmax(mean_range_full[min_range_idx:])) + min_range_idx
+
+    target_dist_m = range_axis[target_bin]
+    print(f"Phase bin   : {target_bin} → {target_dist_m:.2f} m")
+
+    phase_series    = np.angle(complex_ffts[:, target_bin])
     phase_unwrapped = np.unwrap(phase_series)
-    fc             = (f0 + f1) / 2
+    fc              = (f0 + f1) / 2
     displacement_mm = (phase_unwrapped - phase_unwrapped[0]) * c / (4 * np.pi * fc) * 1000
 
     # Remove slow drift: linear detrend then high-pass at 0.05 Hz
@@ -155,7 +183,7 @@ def process(wav_path: str):
         print(f"Est. respiration rate: {peak_resp_freq * 60:.1f} breaths/min")
 
     # ── Plotting ───────────────────────────────────────────────────────────────
-    fig, axes = plt.subplots(4, 1, figsize=(13, 11))
+    fig, axes = plt.subplots(5, 1, figsize=(13, 14))
     fig.suptitle(f"AcousticProbe — {path.name}", fontsize=13)
 
     # 1. Spectrogram of raw mic signal
@@ -168,12 +196,14 @@ def process(wav_path: str):
     ax.set_ylabel("Freq (Hz)")
     ax.set_xlabel("Time (s)")
 
-    # 2. Range profile heatmap (background subtracted)
+    # 2. Range profile heatmap (static background subtracted)
     ax2 = axes[1]
     r_plot = range_axis[:max_range_idx]
     im = ax2.pcolormesh(t_bg, r_plot, bg_window.T, shading='gouraud', cmap='hot')
     ax2.plot(t_smooth, peak_distances[:len(t_smooth)], 'c-', lw=1.2, label='peak dist')
-    ax2.set_title("Range profile (background subtracted)")
+    ax2.axhline(target_dist_m, color='yellow', lw=1.0, ls='--',
+                label=f'phase bin ({target_dist_m:.2f} m)')
+    ax2.set_title("Range profile (static clutter removed)")
     ax2.set_ylabel("Distance (m)")
     ax2.set_xlabel("Time (s)")
     ax2.legend(fontsize=8)
@@ -197,6 +227,17 @@ def process(wav_path: str):
     ax4.legend(fontsize=8)
     ax4.grid(True, alpha=0.3)
 
+    # 5. Mean range profile — shows dominant reflectors across all chirps
+    ax5 = axes[4]
+    ax5.plot(range_axis[:max_range_idx], mean_range_full, lw=1.0)
+    ax5.axvline(MIN_RANGE_M, color='gray', lw=0.8, ls='--', label=f'near-field cutoff ({MIN_RANGE_M} m)')
+    ax5.axvline(target_dist_m, color='red', lw=1.2, ls='--', label=f'phase bin ({target_dist_m:.2f} m)')
+    ax5.set_title("Mean range profile (averaged over all chirps)")
+    ax5.set_xlabel("Distance (m)")
+    ax5.set_ylabel("Amplitude")
+    ax5.legend(fontsize=8)
+    ax5.grid(True, alpha=0.3)
+
     plt.tight_layout()
     out = path.with_name(path.stem + "_analyzed.png")
     plt.savefig(str(out), dpi=150)
@@ -204,7 +245,9 @@ def process(wav_path: str):
     plt.show()
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python analyze_fmcw.py <recording.wav>")
-        sys.exit(1)
-    process(sys.argv[1])
+    parser = argparse.ArgumentParser(description="AcousticProbe FMCW analyser")
+    parser.add_argument("wav", help="Path to WAV recording")
+    parser.add_argument("--target", type=float, default=None, metavar="M",
+                        help="Expected target distance in metres (e.g. 0.5)")
+    args = parser.parse_args()
+    process(args.wav, target_dist=args.target)

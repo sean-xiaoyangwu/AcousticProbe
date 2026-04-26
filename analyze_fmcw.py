@@ -61,7 +61,7 @@ def make_chirp(params: dict) -> np.ndarray:
     return np.sin(2 * np.pi * (f0 * t + (B / (2 * T)) * t**2)).astype(np.float32)
 
 
-def process(wav_path: str, target_dist: float = None):
+def process(wav_path: str, target_dist: float = None, motion_threshold: float = 3.0):
     path   = Path(wav_path)
     params = load_params(path)
     fs_raw, data = wavfile.read(str(path))
@@ -137,32 +137,39 @@ def process(wav_path: str, target_dist: float = None):
     target_m = range_axis[target_bin]
     print(f"Target bin: {target_bin} → {target_m:.2f} m")
 
-    # ── Step 6: gesture energy + centroid tracking ───────────────────────────
-    # Gesture energy: total frame-diff within window per chirp.
-    # Peaks clearly during motion events regardless of exact target distance.
-    # Centroid tracks weighted-mean distance (informative when person is clear).
+    # ── Step 6: noise-gated argmax distance tracking ─────────────────────────
+    # Only update position when peak diff exceeds noise threshold; otherwise
+    # hold last known position. This prevents noisy jumps during quiet periods.
     PEAK_WIN = 80
     win_lo   = max(0, target_bin - PEAK_WIN)
     win_hi   = min(max_range_idx, target_bin + PEAK_WIN)
 
-    win_slice     = diff_bg[:, win_lo:win_hi]                   # (N-1, window)
-    win_pos       = range_axis[win_lo:win_hi]
+    win_slice = diff_bg[:, win_lo:win_hi]
+    win_max   = win_slice.max(axis=1)
+    local_peak = np.argmax(win_slice, axis=1)
 
-    # Gesture energy
-    gesture_energy_raw = win_slice.mean(axis=1)
+    # Noise floor: 30th percentile of per-chirp peak values (robust to motion events)
+    noise_floor = np.percentile(win_max, 30)
+    MOTION_THRESH = motion_threshold * noise_floor
 
-    # Motion centroid
-    win_sum       = win_slice.sum(axis=1) + 1e-9
-    centroid_raw  = (win_slice * win_pos[np.newaxis, :]).sum(axis=1) / win_sum
+    # Hold-last-value gating: only move when motion exceeds threshold
+    global_peak = np.empty(len(local_peak), dtype=float)
+    last_valid  = float(target_bin)
+    for i, (mx, pk) in enumerate(zip(win_max, local_peak)):
+        if mx > MOTION_THRESH:
+            last_valid = float(pk + win_lo)
+        global_peak[i] = last_valid
+
+    # Raw argmax (no gate) — kept for comparison plot
+    raw_peak_m = range_axis[(local_peak + win_lo)]
 
     MA, MED = 5, 7
-    gesture_energy_sm = signal.medfilt(gesture_energy_raw, MED)
-    gesture_energy_sm = moving_average(gesture_energy_sm, MA)
-    centroid_sm   = signal.medfilt(centroid_raw, MED)
-    centroid_sm   = moving_average(centroid_sm, MA)
-    t_tracked     = t_diff[MA // 2: MA // 2 + len(gesture_energy_sm)]
+    sm_peak   = signal.medfilt(global_peak, MED)
+    sm_peak   = moving_average(sm_peak, MA)
+    t_tracked = t_diff[MA // 2: MA // 2 + len(sm_peak)]
 
-    tracked_dist_m = centroid_sm
+    tracked_dist_m = range_axis[sm_peak.astype(int)]    # absolute distance (m)
+    print(f"Motion thresh: {motion_threshold:.1f}× noise floor = {MOTION_THRESH:.4f} ({(win_max > MOTION_THRESH).mean()*100:.1f}% frames active)")
 
     # ── Step 7: phase displacement (breathing, sub-mm) ────────────────────────
     phase_raw        = np.angle(complex_ffts[:, target_bin])
@@ -207,19 +214,16 @@ def process(wav_path: str, target_dist: float = None):
     ax2.legend(fontsize=8)
     plt.colorbar(im, ax=ax2)
 
-    # 3. Gesture energy + centroid — PRIMARY gesture output
+    # 3. Tracked distance — PRIMARY gesture output (absolute, metres)
     ax3 = axes[2]
-    ax3b = ax3.twinx()
-    ax3.plot(t_tracked, gesture_energy_sm, lw=1.4, color='steelblue', label='motion energy')
-    ax3b.plot(t_tracked, centroid_sm, lw=1.0, color='orange', alpha=0.7, label='centroid (m)')
-    ax3.set_title("Gesture motion energy (peaks = motion events) + centroid distance")
-    ax3.set_ylabel("Mean |ΔAmplitude|", color='steelblue')
-    ax3b.set_ylabel("Distance (m)", color='orange')
+    ax3.plot(t_diff, raw_peak_m, lw=0.6, alpha=0.35, color='gray', label='raw argmax (no gate)')
+    ax3.plot(t_tracked, tracked_dist_m, lw=1.4, color='steelblue', label='gated & smoothed')
+    ax3.axhline(target_m, color='gray', lw=0.8, ls='--', label=f'baseline {target_m:.2f} m')
+    ax3.set_title("Tracked distance (gesture) — absolute position of dominant motion")
+    ax3.set_ylabel("Distance (m)")
     ax3.set_xlabel("Time (s)")
+    ax3.legend(fontsize=8)
     ax3.grid(True, alpha=0.3)
-    lines1, labels1 = ax3.get_legend_handles_labels()
-    lines2, labels2 = ax3b.get_legend_handles_labels()
-    ax3.legend(lines1 + lines2, labels1 + labels2, fontsize=8)
 
     # 4. Phase displacement — SECONDARY breathing output
     ax4 = axes[3]

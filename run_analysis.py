@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 def run_batch(paths: list[str], target: float | None, thresh: float,
               status_var: tk.StringVar, btn: tk.Button):
-    import importlib, subprocess
+    import importlib, subprocess, shutil, glob
     import matplotlib.pyplot as plt
     import analyze_fmcw
     import compare_conditions
@@ -27,49 +27,66 @@ def run_batch(paths: list[str], target: float | None, thresh: float,
 
     total = len(paths)
     failed = []
+    individual_pngs = []
 
     # ── Step 1: individual analysis ──────────────────────────────────────────
     for i, wav_path in enumerate(paths, 1):
         name = Path(wav_path).name
-        status_var.set(f"[{i}/{total}] Analyzing {name}…")
+        status_var.set(f"[{i}/{total}] Analyzing {name}...")
         try:
             analyze_fmcw.process(wav_path, target_dist=target,
                                  motion_threshold=thresh)
             out = Path(wav_path).with_name(Path(wav_path).stem + "_analyzed.png")
-            subprocess.Popen(["open", str(out)])
+            if out.exists():
+                individual_pngs.append(out)
         except Exception as e:
             failed.append(f"{name}: {e}")
 
     # ── Step 2: comparison figures (only when 2+ files) ──────────────────────
+    out_dir = None
     if len(paths) >= 2:
-        status_var.set("Generating comparison figures…")
+        status_var.set("Generating comparison figures...")
         try:
             labels = [Path(p).stem for p in paths]
 
-            # Suppress plt.show() — running in a background thread
+            # Suppress plt.show() -- running in a background thread
             _orig_show = plt.show
             plt.show = lambda: None
             compare_conditions.main(paths, labels)
             plt.show = _orig_show
             plt.close("all")
 
+            # Find the newest analysis_* folder
             first_dir = Path(paths[0]).parent
-            for fname in ["metrics_comparison.png",
-                          "signal_comparison.png",
-                          "metrics_table.png"]:
-                out = first_dir / fname
-                if out.exists():
-                    subprocess.Popen(["open", str(out)])
+            analysis_dirs = sorted(first_dir.glob("analysis_*"), key=lambda d: d.name)
+            if analysis_dirs:
+                out_dir = analysis_dirs[-1]
+
+                # Copy individual analysis PNGs into the output folder
+                for png in individual_pngs:
+                    if png.exists():
+                        shutil.copy2(str(png), str(out_dir / png.name))
+
+                # Open the output folder
+                subprocess.Popen(["open", str(out_dir)])
         except Exception as e:
             failed.append(f"Comparison: {e}")
+    else:
+        # Single file: just open the PNG
+        for png in individual_pngs:
+            subprocess.Popen(["open", str(png)])
 
     # ── Done ─────────────────────────────────────────────────────────────────
     if failed:
         messagebox.showerror("Errors", "\n".join(failed))
         status_var.set(f"Done with {len(failed)} error(s).")
     else:
-        suffix = " + comparison" if len(paths) >= 2 else ""
-        status_var.set(f"Done — {total} file(s) analyzed{suffix}.")
+        suffix = ""
+        if out_dir:
+            suffix = f" -> {out_dir.name}/"
+        elif len(paths) >= 2:
+            suffix = " + comparison"
+        status_var.set(f"Done -- {total} file(s) analyzed{suffix}.")
     btn.config(state="normal")
 
 
@@ -80,6 +97,21 @@ def pick_and_run():
     )
     if not paths:
         return
+
+    paths = list(paths)
+
+    # Auto-detect bare/baseline: file with "bare" in name goes first.
+    # If none found, oldest file (by mtime) is assumed to be bare.
+    bare_idx = None
+    for i, p in enumerate(paths):
+        if "bare" in Path(p).stem.lower():
+            bare_idx = i
+            break
+    if bare_idx is not None and bare_idx != 0:
+        paths[0], paths[bare_idx] = paths[bare_idx], paths[0]
+    elif bare_idx is None and len(paths) >= 2:
+        # Sort by modification time — oldest first (likely bare)
+        paths.sort(key=lambda p: Path(p).stat().st_mtime)
 
     raw = target_var.get().strip()
     target = None
@@ -92,11 +124,12 @@ def pick_and_run():
 
     thresh = thresh_var.get()
     n = len(paths)
-    status_var.set(f"{n} file(s) queued…")
+    baseline_name = Path(paths[0]).stem
+    status_var.set(f"{n} file(s) queued. Baseline: {baseline_name}")
     btn.config(state="disabled")
     threading.Thread(
         target=run_batch,
-        args=(list(paths), target, thresh, status_var, btn),
+        args=(paths, target, thresh, status_var, btn),
         daemon=True,
     ).start()
 

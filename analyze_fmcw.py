@@ -86,14 +86,24 @@ def process(wav_path: str, target_dist: float = None, motion_threshold: float = 
     rx_filtered = bandpass(data, f0 - 500, f1 + 500, fs)
     drop        = int(1.0 / T)
     num_chirps  = len(rx_filtered) // N
-    rx_data     = rx_filtered[:num_chirps * N].reshape(num_chirps, N)
-    tx_data     = np.tile(make_chirp(params), (num_chirps, 1))
+    tx_chirp    = make_chirp(params)
+
+    # Cross-correlation alignment (borrowed from KevinsWang pipeline):
+    # Find the precise start offset of the first chirp via cross-correlation
+    # with the template, then re-segment. Corrects audio buffer timing jitter.
+    search_len = min(3 * N, len(rx_filtered))
+    corr       = np.abs(np.correlate(rx_filtered[:search_len], tx_chirp, mode='valid'))
+    offset     = int(np.argmax(corr))
+    rx_aligned = rx_filtered[offset:]
+    num_chirps  = len(rx_aligned) // N
+    rx_data     = rx_aligned[:num_chirps * N].reshape(num_chirps, N)
+    tx_data     = np.tile(tx_chirp, (num_chirps, 1))
 
     rx_data    = rx_data[drop:]
     tx_data    = tx_data[drop:]
     num_chirps -= drop
     t_chirps   = np.arange(num_chirps) * T
-    print(f"Chirps   : {num_chirps}  (dropped first {drop})")
+    print(f"Chirps   : {num_chirps}  (dropped first {drop}, chirp offset {offset} samples)")
 
     # ── Step 2: mix + lowpass → beat signal ──────────────────────────────────
     mixed    = rx_data * tx_data
@@ -101,8 +111,12 @@ def process(wav_path: str, target_dist: float = None, motion_threshold: float = 
         lambda x: lowpass(x, 5000, fs), 1, mixed)
 
     # ── Step 3: FFT → complex range profile (computed once) ──────────────────
+    # Hanning window applied to beat signal before FFT (borrowed from KevinsWang):
+    # suppresses rectangular-window sidelobes from -13 dB to -31 dB, reducing
+    # near-field leakage bleed into adjacent range bins.
     NFFT         = N * 4
-    complex_ffts = np.fft.rfft(mixed_lp, n=NFFT, axis=1)
+    hann_win     = np.hanning(N)
+    complex_ffts = np.fft.rfft(mixed_lp * hann_win, n=NFFT, axis=1)
     range_ffts   = np.abs(complex_ffts)
     freq_axis    = np.fft.rfftfreq(NFFT, d=1/fs)
     range_axis   = freq_axis * c * T / (2 * B)

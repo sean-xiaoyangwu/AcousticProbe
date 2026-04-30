@@ -1,6 +1,7 @@
 """
 AcousticProbe — GUI launcher
 Double-click AcousticProbe Analyzer.app, or run:  python run_analysis.py
+Supports multiple WAV files — each is analyzed and its PNG opened.
 """
 
 import sys
@@ -12,31 +13,40 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 
-def run_analysis(wav_path: str, target: float | None, thresh: float,
-                 status_var: tk.StringVar, btn: tk.Button):
-    try:
-        status_var.set("Analyzing…")
-        import analyze_fmcw
-        import importlib
-        importlib.reload(analyze_fmcw)          # pick up any code changes
-        analyze_fmcw.process(wav_path, target_dist=target, motion_threshold=thresh)
-        out = Path(wav_path).with_name(Path(wav_path).stem + "_analyzed.png")
-        status_var.set(f"Done — {out.name}")
-        import subprocess
-        subprocess.Popen(["open", str(out)])
-    except Exception as e:
-        messagebox.showerror("Error", str(e))
-        status_var.set("Failed.")
-    finally:
-        btn.config(state="normal")
+def run_batch(paths: list[str], target: float | None, thresh: float,
+              status_var: tk.StringVar, btn: tk.Button):
+    import analyze_fmcw
+    import importlib
+    import subprocess
+    importlib.reload(analyze_fmcw)
+
+    total = len(paths)
+    failed = []
+    for i, wav_path in enumerate(paths, 1):
+        name = Path(wav_path).name
+        status_var.set(f"[{i}/{total}] Analyzing {name}…")
+        try:
+            analyze_fmcw.process(wav_path, target_dist=target,
+                                 motion_threshold=thresh)
+            out = Path(wav_path).with_name(Path(wav_path).stem + "_analyzed.png")
+            subprocess.Popen(["open", str(out)])
+        except Exception as e:
+            failed.append(f"{name}: {e}")
+
+    if failed:
+        messagebox.showerror("Errors", "\n".join(failed))
+        status_var.set(f"Done with {len(failed)} error(s).")
+    else:
+        status_var.set(f"Done — {total} file(s) analyzed.")
+    btn.config(state="normal")
 
 
 def pick_and_run():
-    path = filedialog.askopenfilename(
-        title="Select FMCW recording",
+    paths = filedialog.askopenfilenames(
+        title="Select FMCW recording(s)",
         filetypes=[("WAV files", "*.wav"), ("All files", "*.*")],
     )
-    if not path:
+    if not paths:
         return
 
     raw = target_var.get().strip()
@@ -49,11 +59,12 @@ def pick_and_run():
             return
 
     thresh = thresh_var.get()
-    status_var.set(f"Loaded: {Path(path).name}")
+    n = len(paths)
+    status_var.set(f"{n} file(s) queued…")
     btn.config(state="disabled")
     threading.Thread(
-        target=run_analysis,
-        args=(path, target, thresh, status_var, btn),
+        target=run_batch,
+        args=(list(paths), target, thresh, status_var, btn),
         daemon=True,
     ).start()
 
@@ -66,7 +77,7 @@ frame = tk.Frame(root, padx=30, pady=24)
 frame.pack()
 
 tk.Label(frame, text="AcousticProbe", font=("Helvetica", 16, "bold")).pack(pady=(0, 4))
-tk.Label(frame, text="Select a WAV recording to run the full FMCW analysis.",
+tk.Label(frame, text="Select one or more WAV recordings to run the full FMCW analysis.",
          font=("Helvetica", 11), fg="#555").pack(pady=(0, 16))
 
 # Target distance row
@@ -93,7 +104,7 @@ thresh_slider.pack(side="left")
 tk.Label(thresh_row, text="low=sensitive  high=stable",
          font=("Helvetica", 9), fg="#999").pack(side="left", padx=(8, 0))
 
-btn = tk.Button(frame, text="Open WAV file…", command=pick_and_run,
+btn = tk.Button(frame, text="Open WAV file(s)…", command=pick_and_run,
                 font=("Helvetica", 13), padx=16, pady=8,
                 bg="#0A84FF", fg="white", relief="flat", cursor="hand2")
 btn.pack()

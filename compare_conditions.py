@@ -109,8 +109,28 @@ def process_one(wav_path):
     jt=np.std(pd)*100
 
     # Motion signal (wider band, 0.1–10 Hz for hand/body movement)
-    ms = bp_zp(dd, 0.1, min(10.0, fs_c/2 - 0.5), fs_c) if fs_c > 21 else rs
+    nyq_motion = min(10.0, fs_c/2 - 0.5)
+    ms = bp_zp(dd, 0.1, nyq_motion, fs_c) if fs_c > 21 else rs
     motion_amp = np.percentile(ms, 97.5) - np.percentile(ms, 2.5)
+
+    # ── New motion metrics ──────────────────────────────────────────────
+    # Velocity RMS (mm/s): first derivative of displacement, then RMS
+    vel = np.diff(ms) * fs_c  # mm/s
+    velocity_rms = np.sqrt(np.mean(vel**2))
+
+    # Motion dynamic range (mm): full peak-to-peak of wideband displacement
+    motion_dyn_range = np.max(ms) - np.min(ms)
+
+    # Motion bandwidth (Hz): -3dB bandwidth of motion signal power spectrum
+    ms_fft = np.abs(np.fft.rfft(ms))**2
+    ms_freqs = np.fft.rfftfreq(len(ms), d=T)
+    ms_fft_norm = ms_fft / (np.max(ms_fft) + 1e-12)
+    above_3db = ms_freqs[ms_fft_norm >= 0.5]  # -3dB = half power
+    motion_bw = (above_3db[-1] - above_3db[0]) if len(above_3db) >= 2 else 0.0
+
+    # Motion SNR (dB): wideband motion signal vs residual noise
+    ms_noise = dd - ms
+    motion_snr = 10*np.log10(np.var(ms)/(np.var(ms_noise)+1e-12))
 
     # Activity type detection: check if dominant energy is in breathing band vs motion band
     full_fft = np.abs(np.fft.rfft(dd))
@@ -127,15 +147,21 @@ def process_one(wav_path):
             "mean_prof":mp,"resp_signal":rs,"disp_detrended":dd,
             "t_chirps":tc,"resp_fft":rf,"resp_freqs":rfq,
             "motion_signal":ms,"motion_amplitude_mm":motion_amp,
-            "activity_ratio":activity_ratio}
+            "activity_ratio":activity_ratio,
+            "velocity_rms":velocity_rms,"motion_dyn_range_mm":motion_dyn_range,
+            "motion_bw_hz":motion_bw,"motion_snr_db":motion_snr}
 
 
 # ── Visualization ─────────────────────────────────────────────────────────────
 
-def make_radar(ax, labels, results, colors, cond_labels):
+def make_radar(ax, labels, results, colors, cond_labels, is_motion=False):
     """Radar/spider chart — normalized, shows who wins at each metric."""
-    metrics = ["resp_snr_db","csr_db","coherence","breath_confidence","disp_amplitude_mm"]
-    display = ["Resp\nSNR","CSR","Phase\nCoherence","Breathing\nConfidence","Signal\nAmplitude"]
+    if is_motion:
+        metrics = ["motion_snr_db","csr_db","coherence","motion_dyn_range_mm","velocity_rms"]
+        display = ["Motion\nSNR","CSR","Phase\nCoherence","Dynamic\nRange","Velocity\nRMS"]
+    else:
+        metrics = ["resp_snr_db","csr_db","coherence","breath_confidence","disp_amplitude_mm"]
+        display = ["Resp\nSNR","CSR","Phase\nCoherence","Breathing\nConfidence","Signal\nAmplitude"]
     
     n_met = len(metrics)
     angles = np.linspace(0, 2*np.pi, n_met, endpoint=False).tolist()
@@ -166,15 +192,24 @@ def make_radar(ax, labels, results, colors, cond_labels):
     ax.set_title("Overall Performance", fontsize=13, fontweight='bold', pad=20)
 
 
-def make_horizontal_bars(ax, labels, results, colors):
+def make_horizontal_bars(ax, labels, results, colors, is_motion=False):
     """Horizontal grouped bars showing improvement vs bare phone."""
-    metrics = [
-        ("resp_snr_db",       "Resp SNR",          "dB",  True),
-        ("csr_db",            "CSR",               "dB",  True),
-        ("disp_amplitude_mm", "Signal Amplitude",  "mm",  True),
-        ("breath_confidence", "Detection Confidence", "×", True),
-        ("coherence",         "Phase Coherence",   "",    True),
-    ]
+    if is_motion:
+        metrics = [
+            ("motion_snr_db",       "Motion SNR",        "dB",    True),
+            ("csr_db",              "CSR",               "dB",    True),
+            ("motion_dyn_range_mm", "Dynamic Range",     "mm",    True),
+            ("velocity_rms",        "Velocity RMS",      "mm/s",  True),
+            ("coherence",           "Phase Coherence",   "",      True),
+        ]
+    else:
+        metrics = [
+            ("resp_snr_db",       "Resp SNR",          "dB",  True),
+            ("csr_db",            "CSR",               "dB",  True),
+            ("disp_amplitude_mm", "Signal Amplitude",  "mm",  True),
+            ("breath_confidence", "Detection Confidence", "x", True),
+            ("coherence",         "Phase Coherence",   "",    True),
+        ]
 
     n_met = len(metrics)
     n_cond = len(results)
@@ -237,17 +272,25 @@ def make_horizontal_bars(ax, labels, results, colors):
     ax.set_xlim(xlim[0] - 0.05 * x_range, xlim[1] + 0.35 * x_range)
 
 
-def make_improvement_table(ax, labels, results, colors):
+def make_improvement_table(ax, labels, results, colors, is_motion=False):
     """Visual improvement table vs baseline (first condition)."""
     ax.axis('off')
     ax.set_facecolor(BG)
     
-    metrics = [
-        ("resp_snr_db",       "Resp SNR",    "dB",  True),
-        ("disp_amplitude_mm", "Amplitude",   "mm",  True),
-        ("breath_confidence", "Confidence",  "×",   True),
-        ("csr_db",            "CSR",         "dB",  True),
-    ]
+    if is_motion:
+        metrics = [
+            ("motion_snr_db",       "Motion SNR",    "dB",    True),
+            ("motion_dyn_range_mm", "Dyn Range",     "mm",    True),
+            ("velocity_rms",        "Vel RMS",       "mm/s",  True),
+            ("csr_db",              "CSR",           "dB",    True),
+        ]
+    else:
+        metrics = [
+            ("resp_snr_db",       "Resp SNR",    "dB",  True),
+            ("disp_amplitude_mm", "Amplitude",   "mm",  True),
+            ("breath_confidence", "Confidence",  "x",   True),
+            ("csr_db",            "CSR",         "dB",  True),
+        ]
     
     n_cond = len(results)
     if n_cond < 2:
@@ -316,8 +359,14 @@ def main(paths, labels=None):
     # ══════════════════════════════════════════════════════════════════════
     # Figure 1: Dashboard — Radar + Bars + Improvement Table
     # ══════════════════════════════════════════════════════════════════════
+
+    # Detect activity type
+    avg_ratio = np.mean([r["activity_ratio"] for r in results[1:]]) if nc > 1 else results[0]["activity_ratio"]
+    is_motion = avg_ratio > 3.0
+    activity_label = "Hand Movement" if is_motion else "Breathing"
+
     fig = plt.figure(figsize=(20, 11), facecolor=BG)
-    fig.suptitle("AcousticProbe — Performance Dashboard",
+    fig.suptitle(f"AcousticProbe -- Performance Dashboard ({activity_label})",
                  fontsize=18, fontweight='bold', color='#2C3E50', y=0.98)
 
     # Layout: Radar (left, tall) | Bars (top-right) | Table (mid-right) | Highlight (bot-right)
@@ -328,15 +377,15 @@ def main(paths, labels=None):
 
     # Radar chart (left, spans all three rows)
     ax_radar = fig.add_subplot(gs[:, 0], polar=True)
-    make_radar(ax_radar, labels, results, colors, labels)
+    make_radar(ax_radar, labels, results, colors, labels, is_motion=is_motion)
 
     # Horizontal bars (top-right)
     ax_bars = fig.add_subplot(gs[0, 1])
-    make_horizontal_bars(ax_bars, labels, results, colors)
+    make_horizontal_bars(ax_bars, labels, results, colors, is_motion=is_motion)
 
     # Improvement table (mid-right)
     ax_table = fig.add_subplot(gs[1, 1])
-    make_improvement_table(ax_table, labels, results, colors)
+    make_improvement_table(ax_table, labels, results, colors, is_motion=is_motion)
 
     # BPM + Amplitude highlight (bottom-right only)
     ax_hl = fig.add_subplot(gs[2, 1])
@@ -344,72 +393,96 @@ def main(paths, labels=None):
     
     x = np.arange(nc)
     w = 0.25
-    
-    # Solid bars = Amplitude
-    bars1 = ax_hl.bar(x - w/2, [r["disp_amplitude_mm"] for r in results], w,
+
+    if is_motion:
+        # Motion mode: Dynamic Range + Velocity RMS
+        vals_left = [r["motion_dyn_range_mm"] for r in results]
+        vals_right = [r["velocity_rms"] for r in results]
+        label_left, unit_left = "Dynamic Range", "mm"
+        label_right, unit_right = "Velocity RMS", "mm/s"
+    else:
+        # Breathing mode: Amplitude + BPM
+        vals_left = [r["disp_amplitude_mm"] for r in results]
+        vals_right = [r["resp_rate"] for r in results]
+        label_left, unit_left = "Amplitude", "mm"
+        label_right, unit_right = "Breathing rate", "bpm"
+
+    bars1 = ax_hl.bar(x - w/2, vals_left, w,
                       color=colors[:nc], alpha=0.85, edgecolor='white', linewidth=0.5)
     
-    # Hatched bars = BPM
     ax2 = ax_hl.twinx()
-    bars2 = ax2.bar(x + w/2, [r["resp_rate"] for r in results], w,
+    bars2 = ax2.bar(x + w/2, vals_right, w,
                     color=colors[:nc], alpha=0.3, hatch='///', edgecolor='#666', linewidth=0.5)
     
     # Value labels on bars
-    for bar, val in zip(bars1, [r["disp_amplitude_mm"] for r in results]):
+    for bar, val in zip(bars1, vals_left):
         ax_hl.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
-                  f'{val:.2f}mm', ha='center', va='bottom', fontsize=9, fontweight='bold')
-    for bar, val in zip(bars2, [r["resp_rate"] for r in results]):
-        txt = f'{val:.0f} bpm' if val > 0 else 'N/A'
+                  f'{val:.2f}{unit_left}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+    for bar, val in zip(bars2, vals_right):
+        txt = f'{val:.1f} {unit_right}' if val > 0 else 'N/A'
         ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.2,
                 txt, ha='center', va='bottom', fontsize=9, fontweight='bold', color='#666')
     
     ax_hl.set_xticks(x)
     ax_hl.set_xticklabels(labels, fontsize=9)
-    ax_hl.set_ylabel("Amplitude (mm)", fontsize=9)
+    ax_hl.set_ylabel(f"{label_left} ({unit_left})", fontsize=9)
     ax_hl.set_xlim(-0.6, nc - 0.4)
-    ax2.set_ylabel("Breathing rate (bpm)", fontsize=9, color='#999')
-    ax2.axhspan(12, 20, alpha=0.06, color='green')
-    ax_hl.set_title("Signal Strength & Breathing Rate", fontsize=11, fontweight='bold')
+    ax2.set_ylabel(f"{label_right} ({unit_right})", fontsize=9, color='#999')
+    if not is_motion:
+        ax2.axhspan(12, 20, alpha=0.06, color='green')
+    ax_hl.set_title(f"{label_left} & {label_right}", fontsize=11, fontweight='bold')
     ax_hl.grid(axis='y', alpha=0.2)
     
     # Legend explaining the two bar types
     from matplotlib.patches import Patch
     legend_elements = [
-        Patch(facecolor='#888', alpha=0.85, edgecolor='white', label='Amplitude (mm)'),
-        Patch(facecolor='#888', alpha=0.3, hatch='///', edgecolor='#666', label='BPM'),
+        Patch(facecolor='#888', alpha=0.85, edgecolor='white', label=f'{label_left} ({unit_left})'),
+        Patch(facecolor='#888', alpha=0.3, hatch='///', edgecolor='#666', label=f'{label_right} ({unit_right})'),
     ]
     ax_hl.legend(handles=legend_elements, fontsize=7, loc='upper left', framealpha=0.9)
 
     # ── Conclusion text box ───────────────────────────────────────────────
-    # Find the best condition for each key metric
-    best_snr_idx = np.argmax([r["resp_snr_db"] for r in results])
-    best_amp_idx = np.argmax([r["disp_amplitude_mm"] for r in results])
-    best_conf_idx = np.argmax([r["breath_confidence"] for r in results])
+    # Use activity-appropriate metrics for winner calculation
+    if is_motion:
+        win_metrics = [("motion_snr_db",True),("csr_db",True),("coherence",True),
+                       ("motion_dyn_range_mm",True),("velocity_rms",True)]
+        snr_key, amp_key = "motion_snr_db", "motion_dyn_range_mm"
+    else:
+        win_metrics = [("resp_snr_db",True),("csr_db",True),("coherence",True),
+                       ("breath_confidence",True),("disp_amplitude_mm",True)]
+        snr_key, amp_key = "resp_snr_db", "disp_amplitude_mm"
+
+    best_snr_idx = np.argmax([r[snr_key] for r in results])
+    best_amp_idx = np.argmax([r[amp_key] for r in results])
     
     # Overall winner: who wins the most metrics
     wins = [0] * nc
-    for key, hb in [("resp_snr_db",True),("csr_db",True),("coherence",True),
-                     ("breath_confidence",True),("disp_amplitude_mm",True)]:
+    for key, hb in win_metrics:
         vals = [r[key] for r in results]
         winner = np.argmax(vals) if hb else np.argmin(vals)
         wins[winner] += 1
     overall_best = np.argmax(wins)
     
     # Build conclusion lines
-    snr_gain = results[best_snr_idx]["resp_snr_db"] - results[0]["resp_snr_db"]
-    amp_ratio = results[best_amp_idx]["disp_amplitude_mm"] / (results[0]["disp_amplitude_mm"] + 1e-9)
+    snr_gain = results[best_snr_idx][snr_key] - results[0][snr_key]
+    amp_ratio = results[best_amp_idx][amp_key] / (results[0][amp_key] + 1e-9)
     
     conclusion_lines = []
     if nc > 1 and overall_best > 0:
         conclusion_lines.append(f"[BEST]  Best overall: {labels[overall_best]} (wins {wins[overall_best]}/{sum(wins)} metrics)")
         conclusion_lines.append(f"[+]  SNR improvement: +{snr_gain:.1f} dB ({labels[best_snr_idx]})")
-        conclusion_lines.append(f"[+]  Signal amplitude: {amp_ratio:.1f}x stronger ({labels[best_amp_idx]})")
-        
-        best_conf = results[best_conf_idx]["breath_confidence"]
-        if best_conf > 3:
-            conclusion_lines.append(f"[OK]  Reliable detection (confidence {best_conf:.1f}x)")
+        if is_motion:
+            conclusion_lines.append(f"[+]  Dynamic range: {amp_ratio:.1f}x wider ({labels[best_amp_idx]})")
+            best_vel_idx = np.argmax([r["velocity_rms"] for r in results])
+            conclusion_lines.append(f"[+]  Velocity RMS: {results[best_vel_idx]['velocity_rms']:.1f} mm/s ({labels[best_vel_idx]})")
         else:
-            conclusion_lines.append(f"[!]  Detection confidence below threshold ({best_conf:.1f}x < 3x)")
+            conclusion_lines.append(f"[+]  Signal amplitude: {amp_ratio:.1f}x stronger ({labels[best_amp_idx]})")
+            best_conf_idx = np.argmax([r["breath_confidence"] for r in results])
+            best_conf = results[best_conf_idx]["breath_confidence"]
+            if best_conf > 3:
+                conclusion_lines.append(f"[OK]  Reliable detection (confidence {best_conf:.1f}x)")
+            else:
+                conclusion_lines.append(f"[!]  Detection confidence below threshold ({best_conf:.1f}x < 3x)")
     else:
         conclusion_lines.append("[i]  Baseline only -- add structure recordings to compare")
     
@@ -434,15 +507,13 @@ def main(paths, labels=None):
     # ══════════════════════════════════════════════════════════════════════
 
     # Detect dominant activity type across conditions
-    avg_ratio = np.mean([r["activity_ratio"] for r in results[1:]]) if nc > 1 else results[0]["activity_ratio"]
-    if avg_ratio > 3.0:
-        activity_label = "Hand Movement"
+    # (is_motion and activity_label already computed above)
+    if is_motion:
         filt_label = "Motion Waveform (filtered 0.1-10 Hz)"
         spectrum_label = "Motion Spectrum"
         spectrum_unit = "movements/min"
         amp_label = "Motion Amplitude"
     else:
-        activity_label = "Breathing"
         filt_label = "Breathing Waveform (filtered 0.1-3 Hz)"
         spectrum_label = "Breathing Spectrum"
         spectrum_unit = "breaths/min"
@@ -467,8 +538,8 @@ def main(paths, labels=None):
     # Filtered waveform (breathing or motion)
     ax = axes2[0, 1]
     for i, r in enumerate(results):
-        waveform = r["motion_signal"] if avg_ratio > 3.0 else r["resp_signal"]
-        amp = r["motion_amplitude_mm"] if avg_ratio > 3.0 else r["disp_amplitude_mm"]
+        waveform = r["motion_signal"] if is_motion else r["resp_signal"]
+        amp = r["motion_amplitude_mm"] if is_motion else r["disp_amplitude_mm"]
         t = r["t_chirps"]
         # Trim to match waveform length if needed
         minlen = min(len(t), len(waveform))
@@ -484,7 +555,7 @@ def main(paths, labels=None):
         mk = (r["resp_freqs"]>=0.05)&(r["resp_freqs"]<=2.0)
         ax.plot(r["resp_freqs"][mk]*60, r["resp_fft"][mk],
                 color=colors[i], lw=2, alpha=0.85, label=labels[i])
-    if avg_ratio <= 3.0:
+    if not is_motion:
         ax.axvspan(12, 20, alpha=0.08, color='green', label='Normal range')
     ax.set_title(spectrum_label, fontweight='bold')
     ax.set_xlabel(spectrum_unit); ax.set_ylabel("Magnitude")
@@ -525,7 +596,7 @@ def main(paths, labels=None):
 
     if best_rate_idx >= 0 and results[best_rate_idx]["resp_rate"] > 0:
         rate = results[best_rate_idx]["resp_rate"]
-        rate_label = f"{rate:.0f} bpm" if avg_ratio <= 3.0 else f"{rate:.1f} Hz"
+        rate_label = f"{rate:.0f} bpm" if not is_motion else f"{rate:.1f} Hz"
         axes2[1, 0].annotate(
             f"Detected: {rate_label}\n({labels[best_rate_idx]}, conf {best_conf_val:.1f}x)",
             xy=(0.98, 0.95), xycoords='axes fraction',
@@ -542,22 +613,36 @@ def main(paths, labels=None):
     # ══════════════════════════════════════════════════════════════════════
     # Figure 3: Metrics Table (saved as image)
     # ══════════════════════════════════════════════════════════════════════
-    col_headers = ["Condition", "RespSNR\n(dB)", "CSR\n(dB)", "Coherence\n(0-1)",
-                   "Confidence\n(x)", "Amplitude\n(mm)", "BPM", "Jitter\n(cm)"]
+    if is_motion:
+        col_headers = ["Condition", "MotionSNR\n(dB)", "CSR\n(dB)", "Coherence\n(0-1)",
+                       "DynRange\n(mm)", "VelRMS\n(mm/s)", "MotionBW\n(Hz)", "Jitter\n(cm)"]
+    else:
+        col_headers = ["Condition", "RespSNR\n(dB)", "CSR\n(dB)", "Coherence\n(0-1)",
+                       "Confidence\n(x)", "Amplitude\n(mm)", "BPM", "Jitter\n(cm)"]
 
     table_rows = []
     row_colors_list = []
     for i, r in enumerate(results):
-        cs = f"{r['breath_confidence']:.1f}x"
-        bs = f"{r['resp_rate']:.1f}" if r['resp_rate'] > 0 else "N/A"
-        row = [labels[i],
-               f"{r['resp_snr_db']:.1f}",
-               f"{r['csr_db']:.1f}",
-               f"{r['coherence']:.3f}",
-               cs,
-               f"{r['disp_amplitude_mm']:.2f}",
-               bs,
-               f"{r['tracking_jitter_cm']:.1f}"]
+        if is_motion:
+            row = [labels[i],
+                   f"{r['motion_snr_db']:.1f}",
+                   f"{r['csr_db']:.1f}",
+                   f"{r['coherence']:.3f}",
+                   f"{r['motion_dyn_range_mm']:.2f}",
+                   f"{r['velocity_rms']:.1f}",
+                   f"{r['motion_bw_hz']:.2f}",
+                   f"{r['tracking_jitter_cm']:.1f}"]
+        else:
+            cs = f"{r['breath_confidence']:.1f}x"
+            bs = f"{r['resp_rate']:.1f}" if r['resp_rate'] > 0 else "N/A"
+            row = [labels[i],
+                   f"{r['resp_snr_db']:.1f}",
+                   f"{r['csr_db']:.1f}",
+                   f"{r['coherence']:.3f}",
+                   cs,
+                   f"{r['disp_amplitude_mm']:.2f}",
+                   bs,
+                   f"{r['tracking_jitter_cm']:.1f}"]
         table_rows.append(row)
         row_colors_list.append([colors[i] + '18'] * len(col_headers))  # light tint
 
@@ -567,19 +652,33 @@ def main(paths, labels=None):
         row_colors_list.append(['#FFFFFF'] * len(col_headers))
 
         for i in range(1, nc):
-            ds = results[i]["resp_snr_db"] - results[0]["resp_snr_db"]
             dc = results[i]["csr_db"] - results[0]["csr_db"]
-            ar = results[i]["disp_amplitude_mm"] / (results[0]["disp_amplitude_mm"] + 1e-9)
-            dc_conf = results[i]["breath_confidence"] - results[0]["breath_confidence"]
             dc_coh = results[i]["coherence"] - results[0]["coherence"]
-            row = [f"vs {labels[0]}",
-                   f"{ds:+.1f}",
-                   f"{dc:+.1f}",
-                   f"{dc_coh:+.3f}",
-                   f"{dc_conf:+.1f}x",
-                   f"{ar:.1f}x",
-                   "--",
-                   "--"]
+            if is_motion:
+                ds = results[i]["motion_snr_db"] - results[0]["motion_snr_db"]
+                dr = results[i]["motion_dyn_range_mm"] / (results[0]["motion_dyn_range_mm"] + 1e-9)
+                dv = results[i]["velocity_rms"] / (results[0]["velocity_rms"] + 1e-9)
+                db = results[i]["motion_bw_hz"] - results[0]["motion_bw_hz"]
+                row = [f"vs {labels[0]}",
+                       f"{ds:+.1f}",
+                       f"{dc:+.1f}",
+                       f"{dc_coh:+.3f}",
+                       f"{dr:.1f}x",
+                       f"{dv:.1f}x",
+                       f"{db:+.2f}",
+                       "--"]
+            else:
+                ds = results[i]["resp_snr_db"] - results[0]["resp_snr_db"]
+                ar = results[i]["disp_amplitude_mm"] / (results[0]["disp_amplitude_mm"] + 1e-9)
+                dc_conf = results[i]["breath_confidence"] - results[0]["breath_confidence"]
+                row = [f"vs {labels[0]}",
+                       f"{ds:+.1f}",
+                       f"{dc:+.1f}",
+                       f"{dc_coh:+.3f}",
+                       f"{dc_conf:+.1f}x",
+                       f"{ar:.1f}x",
+                       "--",
+                       "--"]
             table_rows.append(row)
             good_color = '#E8F5E9'
             row_colors_list.append([good_color] * len(col_headers))
@@ -611,21 +710,21 @@ def main(paths, labels=None):
     # Winner banner
     if nc > 1:
         wins = [0] * nc
-        for key, hb in [("resp_snr_db", True), ("csr_db", True), ("coherence", True),
-                         ("breath_confidence", True), ("disp_amplitude_mm", True)]:
+        for key, hb in win_metrics:
             vals = [r[key] for r in results]
             winner = np.argmax(vals) if hb else np.argmin(vals)
             wins[winner] += 1
         overall_best = np.argmax(wins)
-        best_snr = max(range(nc), key=lambda i: results[i]["resp_snr_db"])
-        best_amp = max(range(nc), key=lambda i: results[i]["disp_amplitude_mm"])
-        amp_val = results[best_amp]["disp_amplitude_mm"]
-        amp_ratio2 = amp_val / (results[0]["disp_amplitude_mm"] + 1e-9)
+        best_snr = max(range(nc), key=lambda i: results[i][snr_key])
+        best_amp = max(range(nc), key=lambda i: results[i][amp_key])
+        amp_val = results[best_amp][amp_key]
+        amp_ratio2 = amp_val / (results[0][amp_key] + 1e-9)
 
+        amp_name = "Dynamic Range" if is_motion else "Amplitude"
         summary = (f"BEST OVERALL: {labels[overall_best]} "
                    f"(wins {wins[overall_best]}/5)   |   "
-                   f"Best SNR: {labels[best_snr]} ({results[best_snr]['resp_snr_db']:+.1f} dB)   |   "
-                   f"Best Amplitude: {labels[best_amp]} ({amp_val:.2f} mm, {amp_ratio2:.1f}x)")
+                   f"Best SNR: {labels[best_snr]} ({results[best_snr][snr_key]:+.1f} dB)   |   "
+                   f"Best {amp_name}: {labels[best_amp]} ({amp_val:.2f} mm, {amp_ratio2:.1f}x)")
         fig3.text(0.5, 0.02, summary, ha='center', va='bottom',
                   fontsize=10, fontweight='bold', color='#2C3E50',
                   bbox=dict(boxstyle='round,pad=0.5', facecolor='#E8F6E8',
@@ -639,50 +738,72 @@ def main(paths, labels=None):
     # ══════════════════════════════════════════════════════════════════════
     # Terminal table
     # ══════════════════════════════════════════════════════════════════════
-    print("\n" + "="*95)
+    print("\n" + "="*100)
     print(f"  AcousticProbe -- Performance Metrics ({activity_label})")
-    print("="*95)
-    print(f"{'Condition':<18} {'RespSNR':>9} {'CSR':>8} {'Coherence':>10} "
-          f"{'Confidence':>11} {'Amplitude':>10} {'BPM':>6} {'Jitter':>9}")
-    print(f"{'':18} {'(dB)':>9} {'(dB)':>8} {'(0-1)':>10} "
-          f"{'(x)':>11} {'(mm)':>10} {'':>6} {'(cm)':>9}")
-    print("-"*95)
+    print("="*100)
+    if is_motion:
+        print(f"{'Condition':<18} {'MotSNR':>9} {'CSR':>8} {'Coherence':>10} "
+              f"{'DynRange':>10} {'VelRMS':>10} {'MotBW':>8} {'Jitter':>9}")
+        print(f"{'':18} {'(dB)':>9} {'(dB)':>8} {'(0-1)':>10} "
+              f"{'(mm)':>10} {'(mm/s)':>10} {'(Hz)':>8} {'(cm)':>9}")
+    else:
+        print(f"{'Condition':<18} {'RespSNR':>9} {'CSR':>8} {'Coherence':>10} "
+              f"{'Confidence':>11} {'Amplitude':>10} {'BPM':>6} {'Jitter':>9}")
+        print(f"{'':18} {'(dB)':>9} {'(dB)':>8} {'(0-1)':>10} "
+              f"{'(x)':>11} {'(mm)':>10} {'':>6} {'(cm)':>9}")
+    print("-"*100)
     for i,r in enumerate(results):
-        cs = f"{r['breath_confidence']:.1f}x"
-        bs = f"{r['resp_rate']:.1f}" if r['resp_rate']>0 else "N/A"
-        print(f"{labels[i]:<18} {r['resp_snr_db']:>9.1f} {r['csr_db']:>8.1f} "
-              f"{r['coherence']:>10.3f} {cs:>11} "
-              f"{r['disp_amplitude_mm']:>10.2f} {bs:>6} "
-              f"{r['tracking_jitter_cm']:>9.1f}")
-    print("-"*95)
+        if is_motion:
+            print(f"{labels[i]:<18} {r['motion_snr_db']:>9.1f} {r['csr_db']:>8.1f} "
+                  f"{r['coherence']:>10.3f} {r['motion_dyn_range_mm']:>10.2f} "
+                  f"{r['velocity_rms']:>10.1f} {r['motion_bw_hz']:>8.2f} "
+                  f"{r['tracking_jitter_cm']:>9.1f}")
+        else:
+            cs = f"{r['breath_confidence']:.1f}x"
+            bs = f"{r['resp_rate']:.1f}" if r['resp_rate']>0 else "N/A"
+            print(f"{labels[i]:<18} {r['resp_snr_db']:>9.1f} {r['csr_db']:>8.1f} "
+                  f"{r['coherence']:>10.3f} {cs:>11} "
+                  f"{r['disp_amplitude_mm']:>10.2f} {bs:>6} "
+                  f"{r['tracking_jitter_cm']:>9.1f}")
+    print("-"*100)
 
     if nc>1:
         print(f"\n  Improvement vs {labels[0]}:")
-        print(f"  {'':18} {'dSNR':>9} {'dCSR':>8} {'Amp':>10}")
-        print(f"  {'-'*50}")
-        for i in range(1,nc):
-            ds=results[i]["resp_snr_db"]-results[0]["resp_snr_db"]
-            dc=results[i]["csr_db"]-results[0]["csr_db"]
-            ar=results[i]["disp_amplitude_mm"]/(results[0]["disp_amplitude_mm"]+1e-9)
-            print(f"  {labels[i]:<18} {ds:>+9.1f} dB {dc:>+8.1f} dB {ar:>10.1f}x")
+        if is_motion:
+            print(f"  {'':18} {'dSNR':>9} {'dCSR':>8} {'DynRng':>10} {'VelRMS':>10}")
+            print(f"  {'-'*60}")
+            for i in range(1,nc):
+                ds=results[i]["motion_snr_db"]-results[0]["motion_snr_db"]
+                dc=results[i]["csr_db"]-results[0]["csr_db"]
+                dr=results[i]["motion_dyn_range_mm"]/(results[0]["motion_dyn_range_mm"]+1e-9)
+                vr=results[i]["velocity_rms"]/(results[0]["velocity_rms"]+1e-9)
+                print(f"  {labels[i]:<18} {ds:>+9.1f} dB {dc:>+8.1f} dB {dr:>10.1f}x {vr:>10.1f}x")
+        else:
+            print(f"  {'':18} {'dSNR':>9} {'dCSR':>8} {'Amp':>10}")
+            print(f"  {'-'*50}")
+            for i in range(1,nc):
+                ds=results[i]["resp_snr_db"]-results[0]["resp_snr_db"]
+                dc=results[i]["csr_db"]-results[0]["csr_db"]
+                ar=results[i]["disp_amplitude_mm"]/(results[0]["disp_amplitude_mm"]+1e-9)
+                print(f"  {labels[i]:<18} {ds:>+9.1f} dB {dc:>+8.1f} dB {ar:>10.1f}x")
 
         wins = [0] * nc
-        for key, hb in [("resp_snr_db",True),("csr_db",True),("coherence",True),
-                         ("breath_confidence",True),("disp_amplitude_mm",True)]:
+        for key, hb in win_metrics:
             vals = [r[key] for r in results]
             winner = np.argmax(vals) if hb else np.argmin(vals)
             wins[winner] += 1
         overall_best = np.argmax(wins)
 
         print(f"\n  >>> BEST OVERALL: {labels[overall_best]} (wins {wins[overall_best]}/5 metrics)")
-        best_snr = max(range(nc), key=lambda i: results[i]["resp_snr_db"])
-        best_amp = max(range(nc), key=lambda i: results[i]["disp_amplitude_mm"])
-        snr_val = results[best_snr]["resp_snr_db"]
-        amp_val = results[best_amp]["disp_amplitude_mm"]
-        amp_ratio = amp_val / (results[0]["disp_amplitude_mm"] + 1e-9)
-        print(f"     Best SNR:       {labels[best_snr]} ({snr_val:+.1f} dB)")
-        print(f"     Best Amplitude: {labels[best_amp]} ({amp_val:.2f} mm, {amp_ratio:.1f}x vs bare)")
-    print("="*95)
+        best_snr_t = max(range(nc), key=lambda i: results[i][snr_key])
+        best_amp_t = max(range(nc), key=lambda i: results[i][amp_key])
+        snr_val = results[best_snr_t][snr_key]
+        amp_val = results[best_amp_t][amp_key]
+        amp_ratio = amp_val / (results[0][amp_key] + 1e-9)
+        amp_name = "Dynamic Range" if is_motion else "Amplitude"
+        print(f"     Best SNR:       {labels[best_snr_t]} ({snr_val:+.1f} dB)")
+        print(f"     Best {amp_name}: {labels[best_amp_t]} ({amp_val:.2f} mm, {amp_ratio:.1f}x vs bare)")
+    print("="*100)
 
     plt.show()
 
@@ -704,3 +825,4 @@ if __name__ == "__main__":
         print("Auto-detected (oldest→newest):")
         for i,w in enumerate(ws): print(f"  [{lb[i]}] {w.name}")
         main([str(w) for w in ws], lb)
+        

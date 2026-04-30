@@ -17,7 +17,6 @@ import matplotlib.colors as mcolors
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-LABELS = ["Bare iPhone", "Tube A", "Tube B", "Tube C", "Tube D"]
 COLORS = ["#6C7A89", "#E67E22", "#27AE60", "#E74C3C", "#8E44AD"]
 BG     = "#FAFAFA"
 
@@ -347,7 +346,7 @@ def make_improvement_table(ax, labels, results, colors, is_motion=False):
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main(paths, labels=None):
-    if labels is None: labels = LABELS[:len(paths)]
+    if labels is None: labels = [Path(p).stem for p in paths]
     colors = COLORS[:len(paths)]
     nc = len(paths)
 
@@ -812,7 +811,7 @@ if __name__ == "__main__":
     n = len(sys.argv) - 1
     if n >= 2:
         paths = sys.argv[1:]
-        lb = LABELS[:n] if n<=len(LABELS) else [Path(p).stem for p in paths]
+        lb = [Path(p).stem for p in paths]
         main(paths, lb)
     else:
         dl = Path.home()/"Downloads"
@@ -821,7 +820,7 @@ if __name__ == "__main__":
             print(f"Found {len(ws)} WAVs. Need ≥2.")
             print("Usage: python compare_conditions.py <bare.wav> <tubeA.wav> [...]")
             sys.exit(1)
-        lb = LABELS[:len(ws)]
+        lb = [p.stem for p in ws]
         print("Auto-detected (oldest→newest):")
         for i,w in enumerate(ws): print(f"  [{lb[i]}] {w.name}")
         main([str(w) for w in ws], lb)

@@ -20,6 +20,8 @@ import numpy as np
 from pathlib import Path
 from scipy.io import wavfile
 from scipy import signal
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 
@@ -203,9 +205,19 @@ def process(wav_path: str, target_dist: float = None, motion_threshold: float = 
     resp_fft   = np.abs(np.fft.rfft(resp_signal))
     resp_freqs = np.fft.rfftfreq(len(resp_signal), d=T)
     resp_mask  = (resp_freqs >= 0.1) & (resp_freqs <= 1.0)
+    # if resp_mask.any():
+    #     peak_f = resp_freqs[resp_mask][np.argmax(resp_fft[resp_mask])]
+    #     print(f"Resp rate: {peak_f * 60:.1f} breaths/min")
     if resp_mask.any():
         peak_f = resp_freqs[resp_mask][np.argmax(resp_fft[resp_mask])]
-        print(f"Resp rate: {peak_f * 60:.1f} breaths/min")
+        peak_power = np.max(resp_fft[resp_mask])
+        noise_power = np.median(resp_fft[resp_mask])
+        resp_snr = peak_power / (noise_power + 1e-9)
+    
+        if resp_snr > 3.0:
+            print(f"Resp rate: {peak_f * 60:.1f} breaths/min (SNR: {resp_snr:.1f}×)")
+        else:
+            print(f"No reliable respiration detected (SNR: {resp_snr:.1f}×, need >3×)")
 
     # ── Plotting ──────────────────────────────────────────────────────────────
     fig, axes = plt.subplots(5, 1, figsize=(13, 14))
@@ -276,8 +288,8 @@ def process(wav_path: str, target_dist: float = None, motion_threshold: float = 
     plt.tight_layout()
     out = path.with_name(path.stem + "_analyzed.png")
     plt.savefig(str(out), dpi=150)
+    plt.close(fig)
     print(f"Saved → {out}")
-    plt.show()
 
 
 if __name__ == "__main__":

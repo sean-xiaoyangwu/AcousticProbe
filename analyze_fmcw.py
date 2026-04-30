@@ -171,14 +171,20 @@ def process(wav_path: str, target_dist: float = None, motion_threshold: float = 
     tracked_dist_m = range_axis[sm_peak.astype(int)]    # absolute distance (m)
     print(f"Motion thresh: {motion_threshold:.1f}× noise floor = {MOTION_THRESH:.4f} ({(win_max > MOTION_THRESH).mean()*100:.1f}% frames active)")
 
-    # ── Step 7: phase displacement (breathing, sub-mm) ────────────────────────
+    # ── Step 7: phase displacement ────────────────────────────────────────────
+    fc               = (f0 + f1) / 2
     phase_raw        = np.angle(complex_ffts[:, target_bin])
     phase_unwrapped  = np.unwrap(phase_raw)
-    fc               = (f0 + f1) / 2
     disp_mm          = (phase_unwrapped - phase_unwrapped[0]) * c / (4 * np.pi * fc) * 1000
     disp_detrended   = signal.detrend(disp_mm)
     disp_detrended   = highpass_zp(disp_detrended, 0.05, 1/T)
     resp_signal      = bandpass_zp(disp_detrended, 0.1, 3.0, 1/T)
+
+    # Phase-integrated absolute tracker — anchored to target_m, mm-precision but
+    # unwrapping fails for displacements >> λ/2 = c/(2fc) ≈ 8.6 mm per wrap cycle.
+    # Valid for small/slow motion; compare against argmax for large gestures.
+    disp_m_raw      = (phase_unwrapped - phase_unwrapped[0]) * c / (4 * np.pi * fc)
+    phase_tracked_m = target_m + disp_m_raw   # absolute distance via phase
 
     resp_fft   = np.abs(np.fft.rfft(resp_signal))
     resp_freqs = np.fft.rfftfreq(len(resp_signal), d=T)
@@ -214,12 +220,14 @@ def process(wav_path: str, target_dist: float = None, motion_threshold: float = 
     ax2.legend(fontsize=8)
     plt.colorbar(im, ax=ax2)
 
-    # 3. Tracked distance — PRIMARY gesture output (absolute, metres)
+    # 3. Tracked distance — argmax (coarse, 4.3 cm/bin) vs phase integration (fine, mm)
     ax3 = axes[2]
-    ax3.plot(t_diff, raw_peak_m, lw=0.6, alpha=0.35, color='gray', label='raw argmax (no gate)')
-    ax3.plot(t_tracked, tracked_dist_m, lw=1.4, color='steelblue', label='gated & smoothed')
+    ax3.plot(t_diff, raw_peak_m, lw=0.6, alpha=0.3, color='gray', label='raw argmax (no gate)')
+    ax3.plot(t_tracked, tracked_dist_m, lw=1.4, color='steelblue', label='argmax gated (4.3 cm res)')
+    ax3.plot(t_chirps, phase_tracked_m, lw=1.0, alpha=0.8, color='tomato',
+             label='phase integration (mm res, wraps on large motion)')
     ax3.axhline(target_m, color='gray', lw=0.8, ls='--', label=f'baseline {target_m:.2f} m')
-    ax3.set_title("Tracked distance (gesture) — absolute position of dominant motion")
+    ax3.set_title("Tracked distance — argmax (coarse) vs phase integration (fine)")
     ax3.set_ylabel("Distance (m)")
     ax3.set_xlabel("Time (s)")
     ax3.legend(fontsize=8)

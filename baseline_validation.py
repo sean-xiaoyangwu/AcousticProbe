@@ -54,11 +54,21 @@ GROUND_TRUTH = {
     "30cm-16breath":{"dist_cm": 30,   "bpm": 16.0,   "type": "normal"},
     "50cm-7breath": {"dist_cm": 50,   "bpm": 7.0,    "type": "slow"},
     "50cm-16breath":{"dist_cm": 50,   "bpm": 16.0,   "type": "normal"},
-    # test_2 batch 2026-05-07 (90s recordings, amp 0.5/0.8 A/B)
+    # test_2 batch 2026-05-07 (90s recordings, amp 0.5/0.8 A/B; NO TUBE)
     # NOTE: dist_cm placeholder — update if actual recording distance known
     "1_30s 0.5 23breath": {"dist_cm": 20, "bpm": 15.33, "type": "test_amp0.5"},
     "1_30s 0.5 24breath": {"dist_cm": 20, "bpm": 16.00, "type": "test_amp0.5"},
     "1_30s 0.8 24breath": {"dist_cm": 20, "bpm": 16.00, "type": "test_amp0.8"},
+    # test_3 batch 2026-05-07 (90s recordings WITH TUBE; amp 0.5)
+    # tube spec: <length>cm × <inner-diameter>mm
+    "1'30s 0.5 22breath 5cm_2mm": {"dist_cm": 20, "bpm": 14.67, "type": "tube_5cm_2mm"},
+    "1'30s 0.5 24breath 3cm_5mm": {"dist_cm": 20, "bpm": 16.00, "type": "tube_3cm_5mm"},
+    # test_4 batch 2026-05-07 (60s with TUBE 10mm L × 4mm D; amp 0.5)
+    # short fat tube: acceptance angle ±11.3° in recommended range
+    "10mm_4mm_12bpm": {"dist_cm": 20, "bpm": 12.0, "type": "tube_10mm_4mm"},
+    # test_5 batch 2026-05-07 — paired A/B: bare(no-tube, with-person) vs same tube as test_4
+    "bare_90s_19":      {"dist_cm": 20, "bpm": 12.67, "type": "test5_no_tube"},
+    "10mm_4mm_90s_16":  {"dist_cm": 20, "bpm": 10.67, "type": "test5_tube_10mm_4mm"},
 }
 
 # =====================================================================

@@ -1,0 +1,162 @@
+{
+  "01": {
+    "duration_s": 61.7,
+    "trim_s": 0,
+    "target_dist_m": 0.107,
+    "peaks": [
+      {
+        "freq_hz": 0.1,
+        "bpm": 6.0,
+        "confidence": 6.7
+      },
+      {
+        "freq_hz": 0.1917,
+        "bpm": 11.5,
+        "confidence": 5.7
+      },
+      {
+        "freq_hz": 0.3333,
+        "bpm": 20.0,
+        "confidence": 3.2
+      },
+      {
+        "freq_hz": 0.2583,
+        "bpm": 15.5,
+        "confidence": 3.0
+      },
+      {
+        "freq_hz": 2.575,
+        "bpm": 154.5,
+        "confidence": 2.3
+      }
+    ]
+  },
+  "02": {
+    "duration_s": 61.5,
+    "trim_s": 0,
+    "target_dist_m": 0.107,
+    "peaks": [
+      {
+        "freq_hz": 0.1583,
+        "bpm": 9.5,
+        "confidence": 3.6
+      },
+      {
+        "freq_hz": 0.1,
+        "bpm": 6.0,
+        "confidence": 2.7
+      },
+      {
+        "freq_hz": 0.3167,
+        "bpm": 19.0,
+        "confidence": 2.7
+      },
+      {
+        "freq_hz": 0.2417,
+        "bpm": 14.5,
+        "confidence": 2.5
+      },
+      {
+        "freq_hz": 2.6,
+        "bpm": 156.0,
+        "confidence": 2.3
+      }
+    ]
+  },
+  "03": {
+    "duration_s": 61.1,
+    "trim_s": 0,
+    "target_dist_m": 0.139,
+    "peaks": [
+      {
+        "freq_hz": 0.05,
+        "bpm": 3.0,
+        "confidence": 10.6
+      },
+      {
+        "freq_hz": 0.125,
+        "bpm": 7.5,
+        "confidence": 10.2
+      },
+      {
+        "freq_hz": 0.2083,
+        "bpm": 12.5,
+        "confidence": 10.0
+      },
+      {
+        "freq_hz": 0.2917,
+        "bpm": 17.5,
+        "confidence": 9.6
+      },
+      {
+        "freq_hz": 0.35,
+        "bpm": 21.0,
+        "confidence": 9.0
+      }
+    ]
+  },
+  "04": {
+    "duration_s": 32.3,
+    "trim_s": 15.0,
+    "target_dist_m": 0.107,
+    "peaks": [
+      {
+        "freq_hz": 2.4833,
+        "bpm": 149.0,
+        "confidence": 3.6
+      },
+      {
+        "freq_hz": 0.3,
+        "bpm": 18.0,
+        "confidence": 3.3
+      },
+      {
+        "freq_hz": 0.225,
+        "bpm": 13.5,
+        "confidence": 3.1
+      },
+      {
+        "freq_hz": 0.1,
+        "bpm": 6.0,
+        "confidence": 3.0
+      },
+      {
+        "freq_hz": 2.4,
+        "bpm": 144.0,
+        "confidence": 2.8
+      }
+    ]
+  },
+  "bare": {
+    "duration_s": 76.3,
+    "trim_s": 0,
+    "target_dist_m": 0.107,
+    "peaks": [
+      {
+        "freq_hz": 0.0833,
+        "bpm": 5.0,
+        "confidence": 4.8
+      },
+      {
+        "freq_hz": 0.15,
+        "bpm": 9.0,
+        "confidence": 4.7
+      },
+      {
+        "freq_hz": 0.2167,
+        "bpm": 13.0,
+        "confidence": 4.6
+      },
+      {
+        "freq_hz": 0.35,
+        "bpm": 21.0,
+        "confidence": 4.5
+      },
+      {
+        "freq_hz": 0.2833,
+        "bpm": 17.0,
+        "confidence": 4.4
+      }
+    ]
+  }
+}

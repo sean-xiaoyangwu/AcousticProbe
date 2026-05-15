@@ -321,6 +321,143 @@ def make_real_breathing_figure(wav_path, gt_bpm=None, label=None, out_path=None)
     return out_path
 
 
+def make_combined_real_breathing_figure(items, out_path):
+    """
+    Combine multiple wavs into one figure: N rows x 3 cols (A time-domain, B folded, C spectrum).
+    `items` is a list of dicts with keys: wav_path, label, gt_bpm (optional), result (optional precomputed).
+    """
+    import compare_conditions
+
+    n = len(items)
+    if n == 0:
+        return None
+
+    fig = plt.figure(figsize=(20, max(3.6 * n, 4.0)), facecolor=BG)
+    gs = fig.add_gridspec(
+        n, 3,
+        width_ratios=[1.6, 1.0, 1.2],
+        hspace=0.55,
+        wspace=0.28,
+    )
+
+    fig.suptitle(
+        "AcousticProbe — Real Breathing Evidence (combined)",
+        fontsize=20,
+        fontweight="bold",
+        color=TXT,
+        y=0.995,
+    )
+
+    for i, item in enumerate(items):
+        wav_path = item["wav_path"]
+        label = item.get("label") or Path(wav_path).stem
+        gt_bpm = item.get("gt_bpm")
+        result = item.get("result")
+        if result is None:
+            result = compare_conditions.process_one(wav_path, gt_bpm=gt_bpm, is_control=False)
+
+        t = np.asarray(result["t_metric"])
+        y = np.asarray(result["resp_signal_smooth"])
+        y_raw = np.asarray(result["resp_signal_metric"])
+
+        bpm = float(result["resp_rate_bpm"])
+        period = 60.0 / bpm if bpm > 0 else np.nan
+
+        y_template, r2, corr = fit_sinusoid(t, y, bpm)
+        phase, cycles = fold_cycles(t, y, bpm)
+        cycle_stability = estimate_cycle_stability(cycles)
+        passed, checks = classify_real_breathing(result, corr, cycle_stability, gt_bpm)
+        verdict = "REAL BREATHING-LIKE" if passed else "WEAK / NOT RELIABLE"
+        verdict_color = GOOD if passed else "#C0392B"
+
+        # ---- A. time-domain ----
+        ax1 = fig.add_subplot(gs[i, 0])
+        ax1.set_facecolor(BG)
+        ax1.plot(t, y_raw, color="#BDC3C7", lw=0.9, alpha=0.55, label="Filtered")
+        ax1.plot(t, y, color=MAIN, lw=1.8, label="Smoothed")
+        ax1.plot(t, y_template, color=TXT, lw=1.8, linestyle="--", label=f"Template {bpm:.1f} bpm")
+        if np.isfinite(period) and period > 0:
+            k = 0
+            while t[0] + k * period <= t[-1]:
+                ax1.axvline(t[0] + k * period, color=GOOD, alpha=0.10, lw=1.0)
+                k += 1
+        ax1.set_title(f"{label} — A. Time-domain", fontsize=11, fontweight="bold", loc="left")
+        ax1.set_xlabel("Time (s)", fontsize=9)
+        ax1.set_ylabel("Displacement (mm)", fontsize=9)
+        ax1.grid(True, alpha=0.22, color=GRID)
+        ax1.legend(frameon=False, fontsize=7, loc="upper right")
+
+        summary = (
+            f"BPM={bpm:.1f}  corr={corr:.2f}  R²={r2:.2f}\n"
+            f"{verdict}"
+        )
+        ax1.text(
+            0.015, 0.97, summary,
+            transform=ax1.transAxes,
+            ha="left", va="top", fontsize=8, color=TXT,
+            bbox=dict(boxstyle="round,pad=0.30", facecolor="white",
+                      edgecolor=verdict_color, linewidth=1.4, alpha=0.92),
+        )
+
+        # ---- B. folded cycles ----
+        ax2 = fig.add_subplot(gs[i, 1])
+        ax2.set_facecolor(BG)
+        if cycles.shape[0] > 0:
+            for c in cycles:
+                ax2.plot(phase, c, color=MAIN, lw=0.7, alpha=0.18)
+            mean_cycle = np.mean(cycles, axis=0)
+            ax2.plot(phase, mean_cycle, color=TXT, lw=2.4, label="Avg")
+            ax2.text(
+                0.02, 0.95,
+                f"cycles={cycles.shape[0]}  stab={cycle_stability:.2f}",
+                transform=ax2.transAxes, ha="left", va="top", fontsize=8,
+                bbox=dict(boxstyle="round,pad=0.30", facecolor="white",
+                          edgecolor="#D5D8DC", alpha=0.90),
+            )
+        else:
+            ax2.text(0.5, 0.5, "Not enough cycles", ha="center", va="center",
+                     transform=ax2.transAxes, fontsize=9)
+        ax2.set_title("B. Folded cycles", fontsize=11, fontweight="bold", loc="left")
+        ax2.set_xlabel("Cycle phase", fontsize=9)
+        ax2.set_ylabel("Norm. displacement", fontsize=9)
+        ax2.grid(True, alpha=0.22, color=GRID)
+
+        # ---- C. spectrum ----
+        ax3 = fig.add_subplot(gs[i, 2])
+        ax3.set_facecolor(BG)
+        bpm_axis = np.asarray(result["resp_freqs"]) * 60.0
+        spec = np.asarray(result["resp_fft"])
+        mask = bpm_axis <= 40
+        ax3.plot(bpm_axis[mask], spec[mask], color=MAIN, lw=1.8, label="Spectrum")
+        ax3.axvspan(8, 30, color="#5DADE2", alpha=0.10, label="8–30 bpm")
+        ax3.axvspan(12, 20, color=GOOD, alpha=0.08, label="Resting")
+        ax3.axvline(bpm, color="#C0392B", linestyle="--", lw=1.6, label=f"Det {bpm:.1f}")
+        if gt_bpm is not None:
+            ax3.axvline(gt_bpm, color=PURPLE, linestyle=":", lw=1.8, label=f"GT {gt_bpm:.1f}")
+        if np.any(mask):
+            ax3.set_ylim(0, np.max(spec[mask]) * 1.18)
+        ax3.set_title("C. Spectrum", fontsize=11, fontweight="bold", loc="left")
+        ax3.set_xlabel("Breathing rate (bpm)", fontsize=9)
+        ax3.set_ylabel("Magnitude", fontsize=9)
+        ax3.grid(True, alpha=0.22, color=GRID)
+        ax3.legend(frameon=False, fontsize=7, loc="upper right")
+
+        bpm_error_txt = "—" if gt_bpm is None else f"{abs(bpm - gt_bpm):.1f}"
+        ax3.text(
+            0.02, 0.97,
+            f"Amp={result['disp_amplitude_mm']:.1f}mm  SNR={result['resp_snr_db']:.1f}dB\n"
+            f"Conf={result['breath_confidence']:.1f}×  err={bpm_error_txt}",
+            transform=ax3.transAxes, ha="left", va="top", fontsize=8, color=TXT,
+            bbox=dict(boxstyle="round,pad=0.30", facecolor="white",
+                      edgecolor="#D5D8DC", alpha=0.92),
+        )
+
+    plt.savefig(out_path, dpi=170, facecolor=BG, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved combined real-breathing figure: {out_path}")
+    return out_path
+
+
 def main():
     parser = argparse.ArgumentParser(description="Visualize real breathing evidence from one FMCW WAV file")
     parser.add_argument("wav", help="Input WAV file")

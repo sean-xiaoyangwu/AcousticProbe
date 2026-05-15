@@ -1,0 +1,66 @@
+AcousticProbe — metrics summary (structure mode)
+
+Bare + breathing (breathing condition): amp=12.66 mm, conf=3.73x, SNR=11.49 dB, rate(spec)=12.9 bpm, rate(peaks)=18.3 bpm, reliable=yes, BPM error=3.6
+Tube3 (breathing condition): amp=41.78 mm, conf=2.48x, SNR=6.19 dB, rate(spec)=9.4 bpm, rate(peaks)=25.2 bpm, reliable=no, BPM error=7.3
+Tube3 (breathing condition): amp=40.44 mm, conf=3.97x, SNR=5.88 dB, rate(spec)=15.0 bpm, rate(peaks)=25.6 bpm, reliable=yes, BPM error=0.8
+Tube3 (breathing condition): amp=42.68 mm, conf=4.06x, SNR=7.17 dB, rate(spec)=8.7 bpm, rate(peaks)=25.4 bpm, reliable=yes, BPM error=9.4
+Tube3 (breathing condition): amp=44.19 mm, conf=2.92x, SNR=6.68 dB, rate(spec)=13.4 bpm, rate(peaks)=24.4 bpm, reliable=no, BPM error=4.6
+Tube3 (breathing condition): amp=15.85 mm, conf=2.45x, SNR=10.26 dB, rate(spec)=20.4 bpm, rate(peaks)=19.5 bpm, reliable=no, BPM error=4.1
+Tube4 (breathing condition): amp=38.05 mm, conf=3.62x, SNR=5.78 dB, rate(spec)=11.5 bpm, rate(peaks)=26.5 bpm, reliable=yes, BPM error=5.1
+Tube4 (breathing condition): amp=41.77 mm, conf=2.81x, SNR=6.28 dB, rate(spec)=11.6 bpm, rate(peaks)=26.4 bpm, reliable=no, BPM error=6.1
+Tube4 (breathing condition): amp=40.42 mm, conf=3.91x, SNR=6.11 dB, rate(spec)=12.4 bpm, rate(peaks)=23.2 bpm, reliable=yes, BPM error=5.4
+Tube4 (breathing condition): amp=40.39 mm, conf=3.47x, SNR=6.06 dB, rate(spec)=12.9 bpm, rate(peaks)=22.7 bpm, reliable=yes, BPM error=4.5
+Tube4 (breathing condition): amp=12.58 mm, conf=4.01x, SNR=9.48 dB, rate(spec)=16.5 bpm, rate(peaks)=20.1 bpm, reliable=yes, BPM error=0.0
+Tube5 (breathing condition): amp=41.76 mm, conf=3.03x, SNR=6.65 dB, rate(spec)=10.0 bpm, rate(peaks)=24.2 bpm, reliable=yes, BPM error=6.5
+Tube5 (breathing condition): amp=41.23 mm, conf=2.98x, SNR=5.27 dB, rate(spec)=12.2 bpm, rate(peaks)=23.4 bpm, reliable=no, BPM error=4.4
+Tube5 (breathing condition): amp=46.39 mm, conf=3.76x, SNR=6.93 dB, rate(spec)=9.4 bpm, rate(peaks)=22.2 bpm, reliable=yes, BPM error=8.5
+Tube5 (breathing condition): amp=42.06 mm, conf=3.77x, SNR=5.07 dB, rate(spec)=8.7 bpm, rate(peaks)=28.0 bpm, reliable=yes, BPM error=9.4
+Tube5 (breathing condition): amp=20.20 mm, conf=7.44x, SNR=13.56 dB, rate(spec)=19.1 bpm, rate(peaks)=19.9 bpm, reliable=yes, BPM error=2.8
+
+Ground truth BPM for conditions: 16.50, 16.63, 15.81, 18.07, 18.07, 16.23, 16.57, 17.71, 17.79, 17.44, 16.59, 16.54, 16.56, 17.92, 18.09, 16.30
+
+Table 1: Per-condition Detection Metrics
+------------------------------------------------------------------------------------------------------
+Condition                Role        GT BPM  RespSNR       Amp     Conf     BPM  BPM err  Reliable
+                                                (dB)      (mm)      (×)            (bpm)          
+------------------------------------------------------------------------------------------------------
+Bare + breathing         breathing     16.5     11.5      12.7     3.7×    12.9      3.6       Yes
+Tube3                    breathing     16.6      6.2      41.8     2.5×     9.4      7.3        No
+Tube3                    breathing     15.8      5.9      40.4     4.0×    15.0      0.8       Yes
+Tube3                    breathing     18.1      7.2      42.7     4.1×     8.7      9.4       Yes
+Tube3                    breathing     18.1      6.7      44.2     2.9×    13.4      4.6        No
+Tube3                    breathing     16.2     10.3      15.9     2.5×    20.4      4.1        No
+Tube4                    breathing     16.6      5.8      38.1     3.6×    11.5      5.1       Yes
+Tube4                    breathing     17.7      6.3      41.8     2.8×    11.6      6.1        No
+Tube4                    breathing     17.8      6.1      40.4     3.9×    12.4      5.4       Yes
+Tube4                    breathing     17.4      6.1      40.4     3.5×    12.9      4.5       Yes
+Tube4                    breathing     16.6      9.5      12.6     4.0×    16.5      0.0       Yes
+Tube5                    breathing     16.5      6.6      41.8     3.0×    10.0      6.5       Yes
+Tube5                    breathing     16.6      5.3      41.2     3.0×    12.2      4.4        No
+Tube5                    breathing     17.9      6.9      46.4     3.8×     9.4      8.5       Yes
+Tube5                    breathing     18.1      5.1      42.1     3.8×     8.7      9.4       Yes
+Tube5                    breathing     16.3     13.6      20.2     7.4×    19.1      2.8       Yes
+
+Table 2: Evaluation Metrics vs Bare Breathing Baseline
+--------------------------------------------------------------------------------------------------------
+Condition                SNR Improvement vs Bare  Amplitude Ratio vs Bare  Detection Rate     BPM Error  Reliable 
+                         (dB)                     (×)                      (%)                (bpm)               
+--------------------------------------------------------------------------------------------------------
+Tube3                    -5.3                     3.3×                     40%                7.3        No       
+Tube3                    -5.6                     3.2×                     40%                0.8        Yes      
+Tube3                    -4.3                     3.4×                     40%                9.4        Yes      
+Tube3                    -4.8                     3.5×                     40%                4.6        No       
+Tube3                    -1.2                     1.3×                     40%                4.1        No       
+Tube4                    -5.7                     3.0×                     80%                5.1        Yes      
+Tube4                    -5.2                     3.3×                     80%                6.1        No       
+Tube4                    -5.4                     3.2×                     80%                5.4        Yes      
+Tube4                    -5.4                     3.2×                     80%                4.5        Yes      
+Tube4                    -2.0                     1.0×                     80%                0.0        Yes      
+Tube5                    -4.8                     3.3×                     80%                6.5        Yes      
+Tube5                    -6.2                     3.3×                     80%                4.4        No       
+Tube5                    -4.6                     3.7×                     80%                8.5        Yes      
+Tube5                    -6.4                     3.3×                     80%                9.4        Yes      
+Tube5                    +2.1                     1.6×                     80%                2.8        Yes      
+--------------------------------------------------------------------------------------------------------
+Note: Table 2 compares structured conditions against Bare + breathing. These are structural gains vs bare phone.
+Directivity Gain is intentionally left as N/A until matched 0° and 90° recordings are provided.

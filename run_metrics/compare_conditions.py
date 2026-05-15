@@ -35,7 +35,7 @@ CONTROL_LABELS_DEFAULT = [
     "Tube C",
     "Tube D",
 ]
-COLORS = ["#6C7A89", "#E74C3C", "#27AE60", "#2980B9", "#8E44AD"]
+COLORS = ["#C4C4C4", "#5475BC", "#21D4B9", "#F3432C", "#f39b7f", "#4dbbd5", "#00a087", "#e64b35"]
 BG = "#FAFAFA"
 TXT = "#2C3E50"
 GRID = "#D0D7DE"
@@ -1222,715 +1222,516 @@ def convert_for_json(value):
     return value
 
 
-def make_structure_capability_summary(
-    results,
-    labels,
-    colors,
-    out_path=None,
-    gt_bpm=None,
-    mode="structure",
-    *args,
-    **kwargs,
-):
-    """Nature-style 2x2 summary figure for structure-assisted breathing detection.
+def make_structure_capability_summary(results, labels=None, colors=None, out_dir=None, gt_bpm=None, mode="auto"):
+    """
+    Compact summary figure for structure-assisted acoustic breathing detection.
 
-    This function is intentionally visualization-only: it does not change the
-    upstream detection or reliability logic. It accepts the same calling style
-    as main(): results, labels, colors, out_path, gt_bpm, mode.
+    Layout:
+        A (top-left): 4 stacked small-multiple bar charts
+        B (top-right): amplitude bar + respiratory SNR line
+        C (bottom-left): confidence bars with reliable/unreliable zones
+        D (bottom-right): paired bar chart for detected BPM vs ground truth
+
+    Compatible with existing main() calls.
     """
     import numpy as np
     import matplotlib.pyplot as plt
+    from pathlib import Path
     from matplotlib.patches import Patch
     from matplotlib.lines import Line2D
-    from pathlib import Path
 
-    # ---------- robust argument compatibility ----------
-    if out_path is None:
-        out_path = kwargs.get("out_path", kwargs.get("save_path", None))
-    if out_path is None:
-        out_path = Path("structure_capability_summary.png")
-    else:
-        out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    n = len(results)
-    if n == 0:
-        return
-
-    labels = (
-        list(labels) if labels is not None else [f"Condition {i+1}" for i in range(n)]
-    )
-    if len(labels) < n:
-        labels += [f"Condition {i+1}" for i in range(len(labels), n)]
-    labels = labels[:n]
-
-    def _short_label(s):
-        t = str(s)
-        low = t.lower()
-        if "bare" in low or "control" in low or "no-subject" in low:
-            return "Bare / control"
-        if "5cm" in low or "tube a" in low:
-            return "Tube A"
-        if "3cm" in low or "tube b" in low:
-            return "Tube B"
-        return t.replace(" + breathing", "")
-
-    plot_labels = [_short_label(x) for x in labels]
-
-    default_palette = ["#7B8794", "#E74C3C", "#27AE60", "#8E44AD", "#F39C12"]
-    palette = []
-    for i in range(n):
-        try:
-            palette.append(colors[i])
-        except Exception:
-            palette.append(default_palette[i % len(default_palette)])
-
-    def _num(x, default=np.nan):
-        try:
-            if x is None:
-                return default
-            v = float(x)
-            if not np.isfinite(v):
-                return default
-            return v
-        except Exception:
-            return default
+    # =========================================================
+    # Helpers
+    # =========================================================
+    def _first_finite(*vals, default=np.nan):
+        for v in vals:
+            try:
+                if v is None:
+                    continue
+                x = float(v)
+                if np.isfinite(x):
+                    return x
+            except Exception:
+                continue
+        return default
 
     def _get(r, keys, default=np.nan):
         if not isinstance(r, dict):
             return default
         for k in keys:
             if k in r:
-                v = _num(r.get(k), default=np.nan)
-                if np.isfinite(v):
-                    return v
+                return _first_finite(r.get(k), default=default)
         return default
 
-    snr = np.array(
-        [_get(r, ["resp_snr_db", "snr_db", "rsnr_db"]) for r in results], dtype=float
-    )
-    amp = np.array(
-        [_get(r, ["disp_amplitude_mm", "amplitude_mm", "amp_mm"]) for r in results],
-        dtype=float,
-    )
-    conf = np.array(
-        [_get(r, ["breath_confidence", "confidence_x", "confidence"]) for r in results],
-        dtype=float,
-    )
-    det_bpm = np.array(
-        [
-            _get(r, ["resp_rate_bpm", "detected_bpm", "bpm", "peak_bpm"])
-            for r in results
-        ],
-        dtype=float,
-    )
-    reliable = np.array(
-        [
-            bool(r.get("detection_reliable", False)) if isinstance(r, dict) else False
-            for r in results
-        ],
-        dtype=bool,
-    )
+    def _gt_for(i, r):
+        # 1) per-result priority
+        val = _get(
+            r,
+            ["gt_bpm", "ground_truth_bpm", "manual_bpm", "manual_gt_bpm", "true_bpm"],
+            np.nan,
+        )
+        if np.isfinite(val):
+            return val
 
-    # Ground truth: per-result > dict/list/scalar passed from GUI.
-    def _gt_for(i):
-        r = results[i]
-        if isinstance(r, dict):
-            for k in ["ground_truth_bpm", "gt_bpm", "manual_bpm"]:
-                if k in r:
-                    v = _num(r.get(k), default=np.nan)
-                    if np.isfinite(v):
-                        return v
-        if isinstance(gt_bpm, dict):
-            for key in [labels[i], plot_labels[i], str(i), i]:
-                if key in gt_bpm:
-                    return _num(gt_bpm[key], default=np.nan)
-            return np.nan
-        if isinstance(gt_bpm, (list, tuple, np.ndarray)):
-            if i < len(gt_bpm):
-                return _num(gt_bpm[i], default=np.nan)
-            return np.nan
-        return _num(gt_bpm, default=np.nan)
+        # 2) global gt_bpm fallback
+        try:
+            if isinstance(gt_bpm, dict):
+                lab = labels[i] if labels is not None and i < len(labels) else None
+                for key in (lab, str(i), i):
+                    if key in gt_bpm:
+                        return _first_finite(gt_bpm[key], default=np.nan)
+            elif isinstance(gt_bpm, (list, tuple, np.ndarray)):
+                if i < len(gt_bpm):
+                    return _first_finite(gt_bpm[i], default=np.nan)
+            else:
+                return _first_finite(gt_bpm, default=np.nan)
+        except Exception:
+            pass
+        return np.nan
 
-    gt_vals = np.array([_gt_for(i) for i in range(n)], dtype=float)
-    bpm_err = np.array(
-        [_get(r, ["bpm_error", "bpm_err"], default=np.nan) for r in results],
-        dtype=float,
-    )
-    for i in range(n):
-        if (
-            not np.isfinite(bpm_err[i])
-            and np.isfinite(det_bpm[i])
-            and np.isfinite(gt_vals[i])
-        ):
-            bpm_err[i] = abs(det_bpm[i] - gt_vals[i])
+    def _short_label(x):
+        if x is None:
+            return "Condition"
+        s = str(x).strip()
+        s = s.replace("No-subject control", "Bare / control")
+        s = s.replace("Bare + breathing", "Bare / control")
+        s = s.replace("Tube A + breathing", "Tube A")
+        s = s.replace("Tube B + breathing", "Tube B")
+        return s
 
-    # Baseline = first bare/control condition, otherwise first condition.
-    baseline_idx = 0
-    for i, lab in enumerate(labels):
-        low = str(lab).lower()
-        if "bare" in low or "control" in low or "no-subject" in low:
-            baseline_idx = i
-            break
-    baseline_snr = snr[baseline_idx] if np.isfinite(snr[baseline_idx]) else np.nan
-    baseline_amp = amp[baseline_idx] if np.isfinite(amp[baseline_idx]) else np.nan
-    snr_improve = (
-        snr - baseline_snr if np.isfinite(baseline_snr) else np.full(n, np.nan)
-    )
+    def _safe_best_idx(arr, prefer="max"):
+        arr = np.asarray(arr, dtype=float)
+        idx = np.where(np.isfinite(arr))[0]
+        if len(idx) == 0:
+            return 0
+        if prefer == "min":
+            return int(idx[np.argmin(arr[idx])])
+        return int(idx[np.argmax(arr[idx])])
 
-    def _norm_metric(values):
-        values = np.asarray(values, dtype=float)
-        out = np.zeros_like(values, dtype=float)
-        finite = np.isfinite(values)
-        if not finite.any():
-            return out
-        vmin, vmax = np.nanmin(values[finite]), np.nanmax(values[finite])
-        if abs(vmax - vmin) < 1e-12:
-            out[finite] = 0.5
+    def _resolve_save_path(out_dir_like):
+        """
+        Allow caller to pass either:
+            - a directory
+            - or a full png path
+        """
+        if out_dir_like is None:
+            save_dir = Path(".")
+            save_dir.mkdir(parents=True, exist_ok=True)
+            return save_dir / "structure_capability_summary.png"
+
+        if isinstance(out_dir_like, (list, tuple, np.ndarray)):
+            out_dir_like = out_dir_like[-1] if len(out_dir_like) else "."
+
+        p = Path(out_dir_like)
+        if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".pdf", ".svg"}:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            return p
         else:
-            out[finite] = (values[finite] - vmin) / (vmax - vmin)
-        out[~finite] = 0.0
-        return out
+            p.mkdir(parents=True, exist_ok=True)
+            return p / "structure_capability_summary.png"
 
-    def _fmt(v, kind):
-        if not np.isfinite(v):
-            return "N/A"
-        if kind == "snr":
-            return f"{v:.1f} dB"
-        if kind == "amp":
-            return f"{v:.1f} mm"
-        if kind == "conf":
-            return f"{v:.2f}×"
-        if kind == "imp":
-            return f"{v:+.1f} dB"
-        if kind == "bpm":
-            return f"{v:.1f}"
-        return f"{v:.2f}"
+    # =========================================================
+    # Save path / early exit
+    # =========================================================
+    save_path = _resolve_save_path(out_dir)
 
-    # Best performer uses existing reliability first, then BPM error, confidence, SNR.
-    candidates = np.where(reliable)[0]
-    if len(candidates) > 0:
-        # Among reliable ones, prefer lower BPM error if available, then higher confidence.
-        sort_scores = []
-        for i in candidates:
-            err_score = -bpm_err[i] if np.isfinite(bpm_err[i]) else -999
-            conf_score = conf[i] if np.isfinite(conf[i]) else -999
-            snr_score = snr[i] if np.isfinite(snr[i]) else -999
-            sort_scores.append((err_score, conf_score, snr_score))
-        best_idx = int(
-            candidates[
-                int(np.argmax([s[0] * 1e6 + s[1] * 1e3 + s[2] for s in sort_scores]))
-            ]
-        )
-    else:
-        fallback = np.nan_to_num(conf, nan=-np.inf) + 0.05 * np.nan_to_num(snr, nan=0)
-        best_idx = int(np.argmax(fallback)) if np.isfinite(fallback).any() else 0
+    n = len(results)
+    if n == 0:
+        return save_path
 
-    # ---------- visual style ----------
-    plt.rcParams.update(
-        {
-            "font.family": ["Arial", "DejaVu Sans", "sans-serif"],
-            "axes.titleweight": "bold",
-            "axes.titlesize": 10.5,
-            "axes.labelsize": 9.0,
-            "xtick.labelsize": 8.5,
-            "ytick.labelsize": 8.5,
-            "legend.fontsize": 8.0,
-            "figure.dpi": 300,
-            "savefig.dpi": 300,
-            "hatch.linewidth": 0.7,
-        }
-    )
-
-    fig, axs = plt.subplots(2, 2, figsize=(11, 7.5), dpi=300, facecolor="white")
-    fig.subplots_adjust(
-        left=0.09,
-        right=0.965,
-        top=0.845,      # 给总标题/subtitle 和 A/B 标题留空间
-        bottom=0.125,
-        wspace=0.42,    # A/B 中间留 legend 空间
-        hspace=0.58
-    )
-    fig.text(
-        0.08,
-        0.965,
-        "Structure-assisted acoustic breathing detection",
-        fontsize=15.5,
-        weight="bold",
-        ha="left",
-        va="top",
-    )
-    fig.text(
-        0.08,
-        0.925,
-        "Compact comparison of signal magnitude, spectral confidence, and agreement with manually counted breathing rate.",
-        fontsize=8.8,
-        color="#6B6B6B",
-        ha="left",
-        va="top",
-    )
-
-    def _style_ax(ax, grid_axis="y"):
-        ax.set_facecolor("white")
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
-        ax.spines["left"].set_linewidth(0.6)
-        ax.spines["bottom"].set_linewidth(0.6)
-        if grid_axis:
-            ax.grid(True, axis=grid_axis, color="#D0D0D0", alpha=0.32, linewidth=0.55)
-
-    # ---------- A. horizontal grouped bar ----------
-    axA = axs[0, 0]
-    metrics = [
-        ("Resp SNR", snr, "snr", ""),
-        ("Amplitude", amp, "amp", "///"),
-        ("Confidence", conf, "conf", "..."),
-        ("SNR improvement", snr_improve, "imp", "xxx"),
-    ]
-    group_y = np.arange(len(metrics))[::-1]
-    bar_h = 0.30
-    offsets = np.linspace(-bar_h * (n - 1) / 2, bar_h * (n - 1) / 2, n)
-    for m_idx, (m_name, vals, kind, hatch) in enumerate(metrics):
-        norm = _norm_metric(vals)
-        finite = np.isfinite(vals)
-        best_candidates = np.where(finite)[0]
-        best_m = (
-            int(best_candidates[np.nanargmax(vals[finite])])
-            if len(best_candidates)
-            else None
-        )
-        for i in range(n):
-            w = float(norm[i]) if np.isfinite(norm[i]) else 0.0
-            draw_w = w if w > 0 else (0.025 if np.isfinite(vals[i]) else 0.0)
-            y = group_y[m_idx] + offsets[i]
-            axA.barh(
-                y,
-                draw_w,
-                height=bar_h * 0.86,
-                color=palette[i],
-                edgecolor="white",
-                linewidth=0.55,
-                hatch=hatch,
-                alpha=0.92,
-            )
-            if np.isfinite(vals[i]):
-                txt = _fmt(vals[i], kind)
-                # Keep text readable and avoid overlap: long bars get inside labels, short bars outside.
-                if draw_w >= 0.22:
-                    axA.text(
-                        draw_w - 0.015,
-                        y,
-                        txt,
-                        ha="right",
-                        va="center",
-                        fontsize=7.7,
-                        color="white",
-                        weight="bold",
-                    )
-                    star_x = min(draw_w + 0.010, 1.03)
-                else:
-                    axA.text(
-                        draw_w + 0.014,
-                        y,
-                        txt,
-                        ha="left",
-                        va="center",
-                        fontsize=7.7,
-                        color="#222222",
-                    )
-                    star_x = min(draw_w + 0.075, 1.03)
-                if best_m is not None and i == best_m:
-                    axA.text(
-                        star_x,
-                        y,
-                        "★",
-                        ha="left",
-                        va="center",
-                        fontsize=8.4,
-                        color="#222222",
-                    )
-    axA.set_yticks(group_y)
-    axA.set_yticklabels([m[0] for m in metrics])
-    axA.set_xlim(0, 1.14)
-    axA.set_xlabel("Normalized score")
-    axA.set_title("A  Per-metric comparison (★ = best)", loc="left", pad=10)
-    _style_ax(axA, grid_axis="x")
-    handles = [
-        Patch(facecolor=palette[i], edgecolor="none", label=plot_labels[i])
+    plot_labels = [
+        _short_label(labels[i] if labels is not None and i < len(labels) else f"Condition {i+1}")
         for i in range(n)
     ]
 
-    axA.legend(
-        handles=handles,
-        loc="center left",
-        bbox_to_anchor=(0.985, 0.50),   # 放在 A 右侧空白，不要太靠近 B
-        frameon=True,
-        fancybox=False,                 # 更像论文图的小矩形框
-        framealpha=0.95,
-        edgecolor="#D8D8D8",
-        facecolor="white",
-        fontsize=7.2,
-        ncol=1,
-        borderpad=0.22,
-        labelspacing=0.28,
-        handlelength=1.15,              # 短一点
-        handleheight=0.55,              # 瘦一点
-        borderaxespad=0.0,
-    )
+    default_palette = ["#BABABA","#3c5488", "#08B79D",
+                       "#F3432C"]
 
-    # ---------- B. Amplitude + SNR ----------
-    axB = axs[0, 1]
-    x = np.arange(n)
-    b_width = 0.32
-    bars = axB.bar(
-        x,
-        np.nan_to_num(amp, nan=0.0),
-        width=b_width,
-        color=palette,
-        edgecolor="white",
-        linewidth=0.55,
-        alpha=0.92,
+    if colors is not None and len(colors) >= n:
+        palette = list(colors)[:n]
+    else:
+        palette = [default_palette[i % len(default_palette)] for i in range(n)]
+
+    # =========================================================
+    # Extract metrics
+    # =========================================================
+    resp_snr = np.array(
+        [_get(r, ["resp_snr_db", "breathing_snr_db", "snr_db", "respiratory_snr_db"]) for r in results],
+        dtype=float,
     )
-    for i, b in enumerate(bars):
-        if np.isfinite(amp[i]):
-                axB.text(
-                    b.get_x() + b.get_width() / 2,
-                    b.get_height() * 0.84,
-                    f"{amp[i]:.1f} mm",
-                    ha="center",
-                    va="center",
-                    fontsize=7.8,
-                    color="white",
-                    weight="bold",
-                )
-    axB2 = axB.twinx()
-    axB2.plot(x, snr, color="#222222", marker="o", linewidth=1.8, markersize=5)
-    for i, v in enumerate(snr):
-        if np.isfinite(v):
-            if i == n - 1:
-                offset = (-6, 10)
-                ha = "right"
-            else:
-                offset = (3, 10)
-                ha = "left"
-            axB2.annotate(
-                f"{v:.1f} dB",
-                xy=(x[i], v),
-                xytext=offset,
-                textcoords="offset points",
-                fontsize=8.0,
-                color="#222222",
-                ha=ha,
-                va="bottom",
+    amp = np.array(
+        [_get(r, ["disp_amplitude_mm", "amplitude_mm", "amp_mm", "motion_amplitude_mm", "breathing_amp_mm"]) for r in results],
+        dtype=float,
+    )
+    conf = np.array(
+        [_get(r, ["breath_confidence", "confidence", "confidence_ratio", "breathing_confidence", "spectral_confidence", "peak_median_ratio"]) for r in results],
+        dtype=float,
+    )
+    det_bpm = np.array(
+        [_get(r, ["resp_rate_bpm", "detected_bpm", "bpm", "estimated_bpm", "dominant_bpm"]) for r in results],
+        dtype=float,
+    )
+    gt_vals = np.array([_gt_for(i, r) for i, r in enumerate(results)], dtype=float)
+
+    baseline_snr = resp_snr[0] if len(resp_snr) and np.isfinite(resp_snr[0]) else np.nan
+    snr_improve = resp_snr - baseline_snr if np.isfinite(baseline_snr) else np.full(n, np.nan)
+
+    baseline_amp = amp[0] if len(amp) and np.isfinite(amp[0]) and amp[0] != 0 else np.nan
+    amp_ratio = amp / baseline_amp if np.isfinite(baseline_amp) else np.full(n, np.nan)
+
+    bpm_err = np.abs(det_bpm - gt_vals)
+
+    # Reliable / weak logic preserved
+    reliable = []
+    for i in range(n):
+        r = results[i]
+        if isinstance(r, dict) and "detection_reliable" in r:
+            reliable.append(bool(r["detection_reliable"]))
+        else:
+            rel = (
+                np.isfinite(conf[i]) and conf[i] >= 3.0 and
+                np.isfinite(resp_snr[i]) and resp_snr[i] > 0 and
+                (not np.isfinite(bpm_err[i]) or bpm_err[i] < 2.0)
             )
-    axB2.axhline(0, color="#888888", linewidth=0.8, linestyle="--", alpha=0.8)
-    axB2.text(
-        0.98,
-        0,
-        "0 dB reference",
-        transform=axB2.get_yaxis_transform(),
-        ha="right",
-        va="bottom",
-        fontsize=7.6,
-        color="#777777",
-    )
-    axB.set_xticks(x)
-    axB.set_xticklabels(plot_labels, rotation=0)
+            reliable.append(bool(rel))
+    reliable = np.array(reliable, dtype=bool)
+
+    # Pick best performer
+    score = np.zeros(n, dtype=float)
+    for i in range(n):
+        score[i] += 10 if reliable[i] else 0
+        score[i] += conf[i] if np.isfinite(conf[i]) else 0
+        score[i] += 0.2 * resp_snr[i] if np.isfinite(resp_snr[i]) else 0
+        if np.isfinite(bpm_err[i]):
+            score[i] += max(0, 3 - bpm_err[i])
+    best_idx = _safe_best_idx(score, prefer="max")
+
+    # =========================================================
+    # Global style (Nature-refined)
+    # =========================================================
+    VALUE_SIZE = 6.2
+    LEGEND_SIZE = 6.0
+    NOTE_SIZE = 6.8
+    TEXT_COLOR = "#1F1F1F"
+    MUTED_COLOR = "#6F6F6F"
+    GRID_COLOR = "#D9D9D9"
+    GOOD_COLOR = "#4F7A63"
+    BAD_COLOR = "#A44C42"
+    CONF_THR = 3.0
+    BPM_ERR_TARGET = 2.0
+
+    plt.rcParams.update({
+        "font.family": "Arial", "font.size": 6.5,
+        "axes.titlesize": 8.0, "axes.labelsize": 6.8,
+        "xtick.labelsize": 6.2, "ytick.labelsize": 6.2,
+        "axes.linewidth": 0.45, "savefig.dpi": 300,
+        "pdf.fonttype": 42, "ps.fonttype": 42,
+    })
+
+    def _polish(ax, grid_axis="y"):
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.grid(axis=grid_axis, color=GRID_COLOR, alpha=0.22, lw=0.35)
+        ax.tick_params(length=2.2, width=0.45, color="#888888")
+
+    def _fmax(arr, default=1.0):
+        arr = np.asarray(arr, dtype=float)
+        return float(np.nanmax(arr[np.isfinite(arr)])) if np.any(np.isfinite(arr)) else default
+
+    fig = plt.figure(figsize=(13.0, 8.6), dpi=300, facecolor="white")
+    gs = fig.add_gridspec(2, 2, left=0.065, right=0.985, top=0.875,
+                          bottom=0.10, wspace=0.34, hspace=0.42)
+
+    fig.text(0.065, 0.96, "Structure-assisted acoustic breathing detection",
+             ha="left", va="top", fontsize=13, fontweight="bold", color=TEXT_COLOR)
+    fig.text(0.065, 0.932,
+             "Four-panel summary: metric profile, signal strength, "
+             "confidence threshold, and breathing-rate accuracy.",
+             ha="left", va="top", fontsize=7.5, color=MUTED_COLOR)
+
+    x = np.arange(n)
+
+    # =========================================================
+    # A: Per-metric comparison — 2×2 sub-grid of horizontal bar charts
+    # =========================================================
+    gs_A = gs[0, 0].subgridspec(2, 2, hspace=0.50, wspace=0.55)
+
+    metric_names_A = ["Resp SNR", "Amplitude", "Confidence", "SNR \u0394"]
+    metric_units_A = ["dB", "mm", "\u00d7", "dB"]
+    metric_keys_A = [resp_snr, amp, conf, snr_improve]
+    fmts_A = ["{:.1f}", "{:.1f}", "{:.1f}", "{:+.1f}"]
+    higher_better = [True, True, True, True]
+
+    for j, (mname, munit, mvals, fmt, hb) in enumerate(
+            zip(metric_names_A, metric_units_A, metric_keys_A, fmts_A, higher_better)):
+        row_j, col_j = divmod(j, 2)
+        ax_j = fig.add_subplot(gs_A[row_j, col_j])
+
+        vals = np.array(mvals, dtype=float)
+        finite_mask = np.isfinite(vals)
+
+        # Determine bar positions (one bar per condition, vertical stacking)
+        y_pos = np.arange(n)
+        bar_h_j = max(0.45, 0.80)
+
+        for i in range(n):
+            v = vals[i] if finite_mask[i] else 0.0
+            ax_j.barh(y_pos[i], v, height=bar_h_j, color=palette[i],
+                      alpha=1, edgecolor="white", linewidth=0.5)
+            if finite_mask[i]:
+                lbl = fmt.format(vals[i])
+                # Place label outside bar end
+                ha_lbl = "left" if v >= 0 else "right"
+                x_lbl = v + abs(v) * 0.03 + 0.2 if v >= 0 else v - 0.2
+                ax_j.text(x_lbl, y_pos[i], lbl,
+                          ha=ha_lbl, va="center", fontsize=6.0, color=palette[i],
+                          fontweight="bold")
+
+        # Star on best
+        if finite_mask.any():
+            fi = np.where(finite_mask)[0]
+            best_i = fi[int(np.nanargmax(vals[fi]))] if hb else fi[int(np.nanargmin(vals[fi]))]
+            v_best = vals[best_i]
+            x_star = v_best + abs(v_best) * 0.03 + 1.2 if v_best >= 0 else v_best - 1.2
+            ax_j.text(x_star, y_pos[best_i], "\u2605",
+                      ha="center", va="center", fontsize=8, color=palette[best_i])
+
+        ax_j.set_title(f"{mname} ({munit})", fontsize=8, fontweight="bold", loc="left", pad=3)
+        ax_j.set_yticks(y_pos)
+        ax_j.set_yticklabels(plot_labels, fontsize=5.5)
+        ax_j.invert_yaxis()
+        ax_j.spines["top"].set_visible(False)
+        ax_j.spines["right"].set_visible(False)
+        ax_j.tick_params(axis="both", labelsize=5.5, length=2)
+        ax_j.grid(axis="x", color="#CCCCCC", alpha=0.3, lw=0.4)
+
+        # Handle negative values in SNR Δ
+        if not hb or (finite_mask.any() and np.nanmin(vals[finite_mask]) < 0):
+            ax_j.axvline(0, color="#999999", lw=0.5, zorder=0)
+
+    # Panel A shared title
+    fig.text(gs[0, 0].get_position(fig).x0, gs[0, 0].get_position(fig).y1 + 0.01,
+             "A  Per-metric comparison (\u2605 = best)",
+             ha="left", va="bottom", fontsize=9.5, fontweight="bold", color=TEXT_COLOR)
+
+    # =========================================================
+    # B: Signal strength and respiratory SNR
+    # =========================================================
+    axB = fig.add_subplot(gs[0, 1])
+    axB.set_title("B  Signal strength and respiratory SNR",
+                  loc="left", pad=6, fontweight="bold", fontsize=9.5)
+
+    amp_plot = np.where(np.isfinite(amp), amp, 0.0)
+    axB.bar(x, amp_plot, width=0.30, color=palette, alpha=1,
+            edgecolor=palette, linewidth=0.7)
+    for i in range(n):
+        if np.isfinite(amp[i]):
+            axB.text(i, amp[i] + 1.1, f"{amp[i]:.1f}",
+                     ha="center", va="bottom", fontsize=5.8, color=TEXT_COLOR)
+
+    axB2 = axB.twinx()
+    snr_plot = np.where(np.isfinite(resp_snr), resp_snr, 0.0)
+    axB2.plot(x, snr_plot, color=TEXT_COLOR, marker="o", lw=1.2, ms=3.5, zorder=4)
+    axB2.axhline(0, color="#8A8A8A", lw=0.5, ls="--", alpha=0.65)
+    for i in range(n):
+        if np.isfinite(resp_snr[i]):
+            axB2.text(i + 0.05, resp_snr[i] + 0.18, f"{resp_snr[i]:.1f}",
+                      fontsize=5.8, color=TEXT_COLOR)
+
     axB.set_ylabel("Amplitude (mm)")
     axB2.set_ylabel("Resp SNR (dB)")
-    amp_f = amp[np.isfinite(amp)]
-    y_amp_max = max(62, (np.nanmax(amp_f) * 1.32) if len(amp_f) else 62)
-    axB.set_ylim(0, y_amp_max * 1.12)  # 给图例和 SNR 标注留顶部空间
-    snr_f = snr[np.isfinite(snr)]
-    if len(snr_f):
-        axB2.set_ylim(min(0, np.nanmin(snr_f) - 1.0), np.nanmax(snr_f) + 1.0)
-    else:
-        axB2.set_ylim(0, 1)
-    axB.set_title(
-        "B  Signal strength and respiratory SNR",
-        loc="left",
-        fontweight="bold",
-        fontsize=10.5,
-        pad=12,
-    )
-    _style_ax(axB, grid_axis="y")
+    axB.set_xticks(x)
+    axB.set_xticklabels(plot_labels)
+    axB.set_ylim(0, _fmax(amp) * 1.30)
+    fs_snr = resp_snr[np.isfinite(resp_snr)] if np.any(np.isfinite(resp_snr)) else np.array([0.0])
+    axB2.set_ylim(0, float(np.nanmax(fs_snr)) * 1.28)
+    _polish(axB)
     axB2.spines["top"].set_visible(False)
+    axB.legend(handles=[
+        Patch(facecolor="#BBBBBB", edgecolor="#999999", alpha=0.30, label="Amplitude"),
+        Line2D([0], [0], color=TEXT_COLOR, marker="o", lw=1.2, ms=3, label="Resp SNR"),
+    ], loc="upper left", frameon=False, fontsize=5.8, handlelength=1.2)
 
-    # --- B legend: put inside axes to avoid title overlap ---
-    legend_handles = [
-        Patch(facecolor="#7B8794", edgecolor="none", label="Amplitude (mm)"),
-        Line2D([0], [0], color="#222222", marker="o", lw=1.8, label="Resp SNR (dB)"),
-        Line2D([0], [0], color="#888888", lw=0.8, linestyle="--", label="0 dB reference"),
-    ]
+    # =========================================================
+    # C: Breathing detection confidence — lollipop
+    # =========================================================
+    axC = fig.add_subplot(gs[1, 0])
+    axC.set_title("C  Breathing detection confidence",
+                  loc="left", pad=6, fontweight="bold", fontsize=9.5)
 
-    axB.legend(
-        handles=legend_handles,
-        loc="upper right",
-        bbox_to_anchor=(0.985, 0.985),   # 在 B 图内部右上角，不出轴
-        frameon=True,
-        fancybox=False,
-        framealpha=0.92,
-        edgecolor="#D8D8D8",
-        facecolor="white",
-        fontsize=7.2,
-        ncol=1,
-        borderpad=0.24,
-        labelspacing=0.25,
-        handlelength=1.35,
-        handleheight=0.55,
-        borderaxespad=0.15,
-    )
+    cmax = _fmax(conf, 3.0) + 0.65
+    axC.axhspan(CONF_THR, cmax, color=GOOD_COLOR, alpha=0.04, zorder=0)
+    axC.axhspan(0, CONF_THR, color=BAD_COLOR, alpha=0.025, zorder=0)
+    axC.axhline(CONF_THR, color=BAD_COLOR, lw=0.6, ls="--", alpha=0.85)
 
-    # ---------- C. Confidence threshold ----------
-    axC = axs[1, 0]
-    conf_f = conf[np.isfinite(conf)]
-    y_top = max(3.8, (np.nanmax(conf_f) if len(conf_f) else 3.0) + 0.55)
-    axC.axhspan(0, min(3.0, y_top), color="#E74C3C", alpha=0.045, zorder=0)
-    axC.axhspan(3.0, y_top, color="#27AE60", alpha=0.055, zorder=0)
-    axC.axhline(3.0, color="#C0392B", linestyle="--", linewidth=0.9)
-    axC.text(
-        0.99,
-        3.0 + 0.03,
-        "reliable threshold (3×)",
-        transform=axC.get_yaxis_transform(),
-        ha="right",
-        va="bottom",
-        fontsize=7.8,
-        color="#C0392B",
-    )
-    axC.text(
-        0.98,
-        y_top - 0.12,
-        "Reliable zone",
-        transform=axC.get_yaxis_transform(),
-        ha="right",
-        va="top",
-        fontsize=7.8,
-        color="#18864B",
-    )
-    axC.text(
-        0.98,
-        0.12,
-        "Unreliable zone",
-        transform=axC.get_yaxis_transform(),
-        ha="right",
-        va="bottom",
-        fontsize=7.8,
-        color="#C0392B",
-    )
-    barsC = []
+    bar_w_C = 0.55 if n <= 4 else max(0.35, 0.80 / n * 2)
     for i in range(n):
-        val = conf[i] if np.isfinite(conf[i]) else 0.0
-        alpha = 0.95 if val >= 3.0 else 0.40
-        barsC.append(
-            axC.bar(
-                x[i],
-                val,
-                width=0.38,
-                color=palette[i],
-                edgecolor="white",
-                linewidth=0.55,
-                alpha=alpha,
-            )[0]
-        )
-        if np.isfinite(conf[i]):
-            ok = conf[i] >= 3.0
-            axC.text(
-                x[i],
-                val + 0.08,
-                f"{conf[i]:.2f}× {'✓' if ok else '✗'}",
-                ha="center",
-                va="bottom",
-                fontsize=8.0,
-                color="#118847" if ok else "#C0392B",
-                weight="bold",
-            )
+        v = conf[i] if np.isfinite(conf[i]) else 0.0
+        ok = v >= CONF_THR
+        alp = 1 if ok else 0.30
+        axC.bar(i, v, width=bar_w_C, color=palette[i], alpha=alp,
+                edgecolor=palette[i], linewidth=0.7, zorder=2)
+        mark = "\u2713" if ok else "\u2717"
+        axC.text(i, v + 0.10, f"{v:.2f}\u00d7 {mark}",
+                 ha="center", va="bottom", fontsize=5.6, fontweight="bold",
+                 color=GOOD_COLOR if ok else BAD_COLOR)
+
+    axC.text(n - 0.05, CONF_THR + 0.04, "3\u00d7 threshold",
+             ha="right", va="bottom", fontsize=5.8, color=BAD_COLOR)
     axC.set_xticks(x)
-    axC.set_xticklabels(plot_labels, rotation=0)
-    axC.set_ylim(0, y_top)
-    axC.set_ylabel("Peak / median in search band (×)")
-    axC.set_title("C  Breathing detection confidence", loc="left", pad=6)
-    _style_ax(axC, grid_axis="y")
+    axC.set_xticklabels(plot_labels)
+    axC.set_ylabel("Confidence (\u00d7)")
+    axC.set_ylim(0, cmax)
+    _polish(axC)
 
-    # ---------- D. Breathing-rate accuracy ----------
-    axD = axs[1, 1]
+    # =========================================================
+    # D: Breathing rate accuracy — lollipop or boxplot
+    # =========================================================
+    axD = fig.add_subplot(gs[1, 1])
+    axD.set_title("D  Breathing rate accuracy",
+                  loc="left", pad=6, fontweight="bold", fontsize=9.5)
 
-    # TODO: when ≥5 trials per condition, switch to boxplot + scatter overlay.
-    def _trial_errors(r):
+    # Check for multi-trial data
+    def _get_trials_D(r):
         if not isinstance(r, dict):
             return []
-        trials = r.get("trials", None)
-        if not isinstance(trials, (list, tuple)):
-            return []
-        vals = []
-        for t in trials:
-            if not isinstance(t, dict):
-                continue
-            err = _num(t.get("bpm_error", None), default=np.nan)
-            if not np.isfinite(err):
-                d = _num(
-                    t.get("detected_bpm", t.get("resp_rate_bpm", None)), default=np.nan
-                )
-                g = _num(
-                    t.get("ground_truth_bpm", t.get("gt_bpm", None)), default=np.nan
-                )
-                if np.isfinite(d) and np.isfinite(g):
-                    err = abs(d - g)
-            if np.isfinite(err):
-                vals.append(err)
-        return vals
+        trials = r.get("_trial_results", None) or r.get("trials", None)
+        if isinstance(trials, (list, tuple)) and len(trials) > 0:
+            return [t for t in trials if isinstance(t, dict)]
+        return []
 
-    trial_errs = [_trial_errors(r) for r in results]
-    has_multiple = any(len(v) >= 3 for v in trial_errs)
-    if has_multiple:
-        data = [v if len(v) else [np.nan] for v in trial_errs]
+    trial_errs_D = []
+    for i_r, r in enumerate(results):
+        trials = _get_trials_D(r)
+        if len(trials) >= 3:
+            errs = []
+            for t in trials:
+                ev = t.get("bpm_error", None)
+                if ev is not None and np.isfinite(ev):
+                    errs.append(float(ev))
+                else:
+                    dv = t.get("resp_rate_bpm", t.get("peak_bpm", None))
+                    gv = t.get("ground_truth_bpm", t.get("gt_bpm", None))
+                    if dv is not None and gv is not None and np.isfinite(dv) and np.isfinite(gv):
+                        errs.append(abs(float(dv) - float(gv)))
+            trial_errs_D.append(errs)
+        else:
+            trial_errs_D.append([])
+
+    has_boxplot_D = any(len(v) >= 3 for v in trial_errs_D)
+
+    if has_boxplot_D:
+        # ── Multi-trial: boxplot + scatter ────────────────────
+        data_bp = [v if len(v) else [np.nan] for v in trial_errs_D]
         bp = axD.boxplot(
-            data,
-            positions=x,
-            widths=0.42,
-            patch_artist=True,
+            data_bp, positions=x, widths=0.36, patch_artist=True,
             showfliers=False,
-            medianprops=dict(color="#222222", linewidth=1.1),
+            medianprops=dict(color=TEXT_COLOR, linewidth=0.8),
+            boxprops=dict(linewidth=0.5),
+            whiskerprops=dict(linewidth=0.5),
+            capprops=dict(linewidth=0.5),
         )
-        for i, box in enumerate(bp["boxes"]):
-            box.set(
-                facecolor=palette[i], alpha=0.30, edgecolor=palette[i], linewidth=0.8
-            )
-        rng = np.random.default_rng(4)
-        for i, vals in enumerate(trial_errs):
-            if len(vals):
-                jitter = rng.normal(0, 0.035, len(vals))
+        for ib, box in enumerate(bp["boxes"]):
+            box.set_facecolor(palette[ib])
+            box.set_alpha(0.20)
+            box.set_edgecolor(palette[ib])
+
+        rng = np.random.default_rng(3)
+        for isc, errs in enumerate(trial_errs_D):
+            if len(errs):
+                jit = rng.normal(0, 0.035, len(errs))
                 axD.scatter(
-                    np.full(len(vals), x[i]) + jitter,
-                    vals,
-                    s=30,
-                    color=palette[i],
-                    alpha=0.70,
-                    edgecolor="white",
-                    linewidth=0.4,
+                    np.full(len(errs), x[isc]) + jit, errs,
+                    s=14, color=palette[isc], alpha=0.65,
+                    edgecolor="white", linewidth=0.3, zorder=3,
                 )
-        axD.set_ylabel("BPM Error (bpm)")
-        finite_err = [e for v in trial_errs for e in v if np.isfinite(e)]
-        axD.set_ylim(0, max(5, max(finite_err) + 1 if finite_err else 5))
-    else:
-        axD.axhspan(
-            12, 20, color="#27AE60", alpha=0.10, label="Normal resting range", zorder=0
-        )
-        axD.text(
-            0.985,
-            19.7,
-            "Normal resting range",
-            ha="right",
-            va="top",
-            fontsize=7.8,
-            color="#777777",
-            transform=axD.get_yaxis_transform(),
-        )
-        width = 0.26
-        for i in range(n):
-            d = det_bpm[i]
-            g = gt_vals[i]
-            if np.isfinite(d):
-                axD.bar(
-                    x[i] - width / 2,
-                    d,
-                    width=width,
-                    color=palette[i],
-                    edgecolor="white",
-                    linewidth=0.55,
-                    alpha=0.92,
-                )
-            if np.isfinite(g):
-                axD.bar(
-                    x[i] + width / 2,
-                    g,
-                    width=width,
-                    facecolor="white",
-                    edgecolor=palette[i],
-                    linewidth=1.0,
-                    hatch="///",
-                )
-            if np.isfinite(d) and np.isfinite(g):
-                axD.plot(
-                    [x[i] - width / 2, x[i] + width / 2],
-                    [d, g],
-                    color="#9A9A9A",
-                    linestyle="--",
-                    linewidth=0.9,
-                )
-                err = abs(d - g)
-                axD.text(
-                    x[i],
-                    max(d, g) + 0.85,
-                    f"err: {err:.1f} bpm",
-                    ha="center",
-                    va="bottom",
-                    fontsize=8.3,
-                    color="#118847" if err < 2.0 else "#C0392B",
-                )
-        handlesD = [
-            Patch(facecolor="#7B8794", edgecolor="none", label="Detected BPM"),
-            Patch(
-                facecolor="white",
-                edgecolor="#7B8794",
-                hatch="///",
-                label="Ground truth BPM",
-            ),
-            Patch(
-                facecolor="#27AE60",
-                edgecolor="none",
-                alpha=0.10,
-                label="Normal resting range",
-            ),
+
+        axD.axhspan(0, BPM_ERR_TARGET, color=GOOD_COLOR, alpha=0.04, zorder=0)
+        axD.axhline(BPM_ERR_TARGET, color=BAD_COLOR, lw=0.6, ls="--", alpha=0.8)
+        axD.text(n - 0.05, BPM_ERR_TARGET + 0.08, "2 bpm target",
+                 ha="right", va="bottom", fontsize=5.8, color=BAD_COLOR)
+        axD.set_ylabel("BPM error, |detected \u2212 GT|")
+        fe = [e for v in trial_errs_D for e in v if np.isfinite(e)]
+        axD.set_ylim(0, max(6.0, max(fe) + 0.8 if fe else 6.0))
+        legend_D = [
+            Patch(facecolor="#999999", alpha=0.20, edgecolor="#999999",
+                  label="Error distribution"),
+            Line2D([0], [0], marker="o", color="none",
+                   markerfacecolor="#777777", markersize=3, label="Trial"),
+            Line2D([0], [0], color=BAD_COLOR, lw=0.6, ls="--",
+                   label="2 bpm threshold"),
         ]
-        axD.legend(handles=handlesD, loc="upper left", ncol=3, frameon=False)
-        y_candidates = []
-        y_candidates.extend([v for v in det_bpm if np.isfinite(v)])
-        y_candidates.extend([v for v in gt_vals if np.isfinite(v)])
-        y_max = max([20] + y_candidates) + 3
-        axD.set_ylim(0, y_max)
-        axD.set_ylabel("Breathing rate (bpm)")
+    else:
+        # ── Single-trial: error lollipop ──────────────────────
+        axD.axhspan(0, BPM_ERR_TARGET, color=GOOD_COLOR, alpha=0.04, zorder=0)
+        axD.axhline(BPM_ERR_TARGET, color=BAD_COLOR, lw=0.6, ls="--", alpha=0.8)
+
+        for i in range(n):
+            e = bpm_err[i] if np.isfinite(bpm_err[i]) else 0.0
+            ok_e = e < BPM_ERR_TARGET
+            col_e = GOOD_COLOR if ok_e else BAD_COLOR
+            axD.vlines(i, 0, e, color=palette[i], lw=1.5, alpha=0.65, zorder=2)
+            axD.scatter(i, e, s=32, color=palette[i],
+                        edgecolor="white", linewidth=0.5, zorder=3)
+            if np.isfinite(bpm_err[i]):
+                axD.text(i, e + 0.18, f"{e:.1f}",
+                         ha="center", va="bottom", fontsize=5.6,
+                         color=col_e, fontweight="bold")
+
+        axD.text(n - 0.05, BPM_ERR_TARGET + 0.06, "2 bpm target",
+                 ha="right", va="bottom", fontsize=5.8, color=BAD_COLOR)
+        axD.text(n - 0.05, 0.12, "acceptable zone",
+                 ha="right", va="bottom", fontsize=5.6, color=GOOD_COLOR)
+        axD.set_ylabel("BPM error, |detected \u2212 GT|")
+        axD.set_ylim(0, max(6.0, _fmax(bpm_err, 1.0) + 0.9))
+        legend_D = [
+            Patch(facecolor=GOOD_COLOR, alpha=0.10, edgecolor="none",
+                  label="< 2 bpm target zone"),
+            Line2D([0], [0], color=BAD_COLOR, lw=0.6, ls="--",
+                   label="2 bpm threshold"),
+        ]
+
     axD.set_xticks(x)
-    axD.set_xticklabels(plot_labels, rotation=0)
-    axD.set_title("D  Breathing rate accuracy", loc="left", pad=6)
-    _style_ax(axD, grid_axis="y")
+    axD.set_xticklabels(plot_labels)
+    _polish(axD)
+    axD.legend(
+        handles=legend_D, loc="upper center",
+        bbox_to_anchor=(0.5, -0.16), frameon=False,
+        ncol=min(len(legend_D), 3), fontsize=5.8,
+        handlelength=1.2, columnspacing=0.8,
+    )
 
-    # ---------- bottom conclusion ----------
+    # =========================================================
+    # Bottom conclusion text
+    # =========================================================
     best_name = plot_labels[best_idx]
-    best_imp = snr_improve[best_idx] if np.isfinite(snr_improve[best_idx]) else np.nan
-    amp_ratio = (
-        (amp[best_idx] / baseline_amp)
-        if np.isfinite(amp[best_idx])
-        and np.isfinite(baseline_amp)
-        and baseline_amp != 0
-        else np.nan
-    )
-    best_conf = conf[best_idx] if np.isfinite(conf[best_idx]) else np.nan
-    line1 = f"Best performer: {best_name} — Resp SNR {_fmt(best_imp, 'imp')}, amplitude {amp_ratio:.1f}× vs bare phone, confidence {best_conf:.1f}×"
-    if not np.isfinite(amp_ratio):
-        line1 = f"Best performer: {best_name} — Resp SNR {_fmt(best_imp, 'imp')}, confidence {best_conf:.1f}×"
+    snr_plus = snr_improve[best_idx] if np.isfinite(snr_improve[best_idx]) else np.nan
+    amp_ratio_best = amp_ratio[best_idx] if np.isfinite(amp_ratio[best_idx]) else np.nan
+    conf_best = conf[best_idx] if np.isfinite(conf[best_idx]) else np.nan
+    snr_txt = (f"+{snr_plus:.1f} dB" if np.isfinite(snr_plus) and snr_plus >= 0
+               else (f"{snr_plus:.1f} dB" if np.isfinite(snr_plus) else "N/A"))
+    amp_txt = f"{amp_ratio_best:.1f}\u00d7" if np.isfinite(amp_ratio_best) else "N/A"
+    conf_txt = f"{conf_best:.1f}\u00d7" if np.isfinite(conf_best) else "N/A"
+
     fig.text(
-        0.08,
-        0.075,
-        line1,
-        fontsize=9.5,
-        weight="bold",
-        ha="left",
-        va="bottom",
-        color="#222222",
+        0.065, 0.067,
+        f"Best performer: {best_name} \u2014 Resp SNR {snr_txt}, "
+        f"amplitude {amp_txt} vs bare phone, confidence {conf_txt}",
+        fontsize=7.5, fontweight="bold", ha="left", color=TEXT_COLOR,
     )
     fig.text(
-        0.08,
-        0.048,
-        "Reliability: spectral confidence ≥3×, respiratory SNR >0 dB, BPM error <2 bpm vs manual count.",
-        fontsize=8.5,
-        ha="left",
-        va="bottom",
-        color="#777777",
+        0.065, 0.042,
+        "Reliability criteria: confidence \u22653\u00d7, respiratory SNR >0 dB, "
+        "and BPM error close to manual count.",
+        fontsize=6.5, ha="left", color=MUTED_COLOR,
     )
 
-    fig.savefig(out_path, bbox_inches="tight", facecolor="white")
+    # =========================================================
+    # Save / close
+    # =========================================================
+    fig.savefig(save_path, bbox_inches="tight", facecolor="white")
     plt.close(fig)
+    return save_path
 
 
 def main(paths, labels=None, gt_bpm=None, mode="structure"):
@@ -1945,13 +1746,110 @@ def main(paths, labels=None, gt_bpm=None, mode="structure"):
             if mode == "control"
             else LABELS_DEFAULT[: len(paths)]
         )
-    colors = COLORS[: len(paths)]
 
-    results = []
+    # ── Process every file individually ───────────────────────────────────
+    all_results = []
+    all_gt = []
     for i, p in enumerate(paths):
         is_control = mode == "control" and i == 0
+        g = gt_for_index(gt_bpm, i)
         print(f"Processing [{labels[i]}]: {Path(p).name} ...")
-        results.append(process_one(p, gt_for_index(gt_bpm, i), is_control=is_control))
+        all_results.append(process_one(p, g, is_control=is_control))
+        all_gt.append(g)
+
+    # ── Group by label ────────────────────────────────────────────────────
+    from collections import OrderedDict
+    groups = OrderedDict()
+    for i, (label, r, g) in enumerate(zip(labels, all_results, all_gt)):
+        if label not in groups:
+            groups[label] = {"results": [], "gt_bpms": [], "paths": []}
+        groups[label]["results"].append(r)
+        groups[label]["gt_bpms"].append(g)
+        groups[label]["paths"].append(paths[i])
+
+    has_repeats = any(len(v["results"]) > 1 for v in groups.values())
+
+    if has_repeats:
+        print(f"\n{'═'*70}")
+        print("  Detected repeated trials — grouping by label")
+        print(f"{'═'*70}")
+        for label, v in groups.items():
+            print(f"  {label}: {len(v['results'])} trials")
+        print()
+
+    # ── Build aggregated results (one per unique label) ───────────────────
+    SCALAR_KEYS = [
+        "resp_snr_db", "csr_db", "coherence", "breath_confidence",
+        "resp_rate_bpm", "peak_bpm", "disp_amplitude_mm",
+        "tracking_jitter_cm", "bpm_error", "target_m",
+    ]
+
+    unique_labels = list(groups.keys())
+    results = []
+    agg_gt_bpm = []
+
+    for label in unique_labels:
+        trial_results = groups[label]["results"]
+        trial_gts = groups[label]["gt_bpms"]
+        n_trials = len(trial_results)
+
+        if n_trials == 1:
+            agg = dict(trial_results[0])
+            agg["_n_trials"] = 1
+            agg["_trial_results"] = trial_results
+            results.append(agg)
+            agg_gt_bpm.append(trial_gts[0])
+        else:
+            agg = {}
+            for key in SCALAR_KEYS:
+                vals = [r.get(key) for r in trial_results if r.get(key) is not None]
+                if vals:
+                    agg[key] = float(np.nanmean(vals))
+                    agg[key + "_std"] = float(np.nanstd(vals))
+                    agg[key + "_all"] = vals
+                else:
+                    agg[key] = None
+                    agg[key + "_std"] = None
+                    agg[key + "_all"] = []
+
+            n_detected = sum(
+                1 for r in trial_results if r.get("detection_reliable", False)
+            )
+            agg["detection_rate"] = 100.0 * n_detected / n_trials
+            agg["detection_reliable"] = n_detected > n_trials / 2
+
+            # Copy waveform data from best trial (highest confidence)
+            best_idx = 0
+            best_conf = -1
+            for ti, r in enumerate(trial_results):
+                c = r.get("breath_confidence", 0) or 0
+                if c > best_conf:
+                    best_conf = c
+                    best_idx = ti
+            best_trial = trial_results[best_idx]
+            for key in best_trial:
+                if key not in agg:
+                    agg[key] = best_trial[key]
+
+            agg["is_control"] = trial_results[0].get("is_control", False)
+            agg["_n_trials"] = n_trials
+            agg["_trial_results"] = trial_results
+
+            # Use mean of available GTs
+            valid_gts = [g for g in trial_gts if g is not None]
+            agg_gt_bpm.append(float(np.mean(valid_gts)) if valid_gts else None)
+
+            print(f"  {label}: n={n_trials}, "
+                  f"SNR={agg.get('resp_snr_db', 0):.1f}±{agg.get('resp_snr_db_std', 0):.1f} dB, "
+                  f"Amp={agg.get('disp_amplitude_mm', 0):.2f}±{agg.get('disp_amplitude_mm_std', 0):.2f} mm, "
+                  f"Conf={agg.get('breath_confidence', 0):.1f}±{agg.get('breath_confidence_std', 0):.1f}×, "
+                  f"DetRate={agg.get('detection_rate', 0):.0f}%")
+
+            results.append(agg)
+
+    labels = unique_labels
+    gt_bpm = agg_gt_bpm
+    colors = COLORS[: len(labels)]
 
     def safe_name(s):
         s = str(s).strip()
@@ -1993,33 +1891,42 @@ def main(paths, labels=None, gt_bpm=None, mode="structure"):
 
     # ------------------------------------------------------------
     # Extra: real breathing evidence visualization for each breathing condition
+    # Uses the best trial's WAV path from each group
     # ------------------------------------------------------------
     real_breathing_paths = []
 
     try:
         from visualize_real_breathing import make_real_breathing_figure
 
-        for i, (wav_path, label, result) in enumerate(zip(paths, labels, results)):
-            # In control mode, skip the first no-subject control file
+        for i, (label, result) in enumerate(zip(labels, results)):
             if mode == "control" and i == 0:
                 continue
 
+            # Get the best trial's wav path from grouped data
+            trial_results = result.get("_trial_results", [result])
+            best_ti = 0
+            best_c = -1
+            for ti, tr in enumerate(trial_results):
+                c = tr.get("breath_confidence", 0) or 0
+                if c > best_c:
+                    best_c = c
+                    best_ti = ti
+            
+            # Find the corresponding wav path
+            if label in groups:
+                wav_path = groups[label]["paths"][best_ti]
+            else:
+                continue
+
             real_path = out_dir / f"real_breathing_evidence_{safe_name(label)}.png"
-
             gt_i = gt_for_index(gt_bpm, i)
-
             make_real_breathing_figure(
-                wav_path,
-                gt_bpm=gt_i,
-                label=label,
-                out_path=real_path,
+                wav_path, gt_bpm=gt_i, label=label, out_path=real_path,
             )
-
             real_breathing_paths.append(real_path)
 
     except Exception as e:
         import traceback
-
         print("\n[ERROR] Failed to generate real breathing evidence figures:")
         traceback.print_exc()
 
@@ -2047,7 +1954,18 @@ def main(paths, labels=None, gt_bpm=None, mode="structure"):
         "target_m",
     ]
     for label, r in zip(labels, results):
-        metrics_json[label] = {k: convert_for_json(r[k]) for k in keep_keys}
+        entry = {}
+        for k in keep_keys:
+            entry[k] = convert_for_json(r.get(k))
+        # Add grouping info
+        n_trials = r.get("_n_trials", 1)
+        entry["n_trials"] = n_trials
+        if n_trials > 1:
+            entry["detection_rate"] = r.get("detection_rate")
+            for sk in SCALAR_KEYS:
+                if sk + "_std" in r:
+                    entry[sk + "_std"] = convert_for_json(r[sk + "_std"])
+        metrics_json[label] = entry
     metrics_json["_evaluation_metrics"] = {
         "context": eval_ctx,
         "rows": eval_rows,
@@ -2107,7 +2025,10 @@ def main(paths, labels=None, gt_bpm=None, mode="structure"):
             plt.imshow(img)
             plt.axis("off")
             plt.tight_layout()
-    plt.show()
+    try:
+        plt.show()
+    except Exception:
+        pass  # Non-interactive or non-main-thread — skip
 
 
 if __name__ == "__main__":

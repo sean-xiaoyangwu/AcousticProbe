@@ -21,7 +21,7 @@ from tkinter import filedialog, messagebox
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-MAX_FILES = 6
+MAX_FILES = 16
 
 MODE_OPTIONS = {
     "No-subject control": "control",
